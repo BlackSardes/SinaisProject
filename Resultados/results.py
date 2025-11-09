@@ -1,4 +1,7 @@
-# matriz de confusão e relatorio de classificação
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import numpy as np
+
 print("\n--- Relatório de Classificação ---")
 print(classification_report(y_test, y_pred, target_names=['Authentic (0)', 'Spoofed (1)']))
 
@@ -6,10 +9,7 @@ conf_matrix = confusion_matrix(y_test, y_pred)
 print("\n--- Matriz de Confusão ---")
 print(conf_matrix)
 
-# explicando a matriz de confusão
 TN, FP, FN, TP = conf_matrix.ravel()
-# True Positive Rate (Sensibilidade/Recall) = TP / (TP + FN)
-# False Positive Rate (Risco de Alarme Falso) = FP / (FP + TN)
 
 print(f"\nDetalhes do Desempenho (Baseado em Teste):")
 print(f"Acurácia: {model.score(X_test, y_test):.4f}")

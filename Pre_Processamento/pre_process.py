@@ -1,59 +1,44 @@
-## 1. PRÉ-PROCESSAMENTO (LEITURA, FILTRAGEM RFI E NORMALIZAÇÃO)
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import correlate, iirfilter, lfilter, butter
-import pandas as pd
+from scipy.signal import iirfilter, lfilter
 from scipy.fft import fft, fftfreq
 
-# parametros globais 
-folder_path = r"Caminho/TEXBAT"  # MUDAR: Pasta com ds1.bin, ds2.bin, etc.
-fs = 25e6                      # Taxa de amostragem em Hz (25 MHz para TEXBAT)
+folder_path = r"Caminho/DO_ARQUIVO_BINARIO"
+fs = 26e6
 prn_to_track = 1                
-center_freq = 0e6               # Frequência central (IF)
-test_doppler_freq = 0           # Início da busca Doppler (0 Hz para teste)
+center_freq = 0e6
+test_doppler_freq = 0
 ca_chip_rate = 1.023e6
 
-# janelamento de dados
-segment_duration_s = 0.5        # Duração de cada segmento (janela) em segundos
+segment_duration_s = 0.5
 num_samples_per_segment = int(fs * segment_duration_s)
 
-SPOOF_START_TIME_S = 150.0
-
-# funçoes de preprocessamento 
+SPOOF_START_TIME_S = 60.0
 
 def apply_notch_filter(signal, fs, f0, Q):
-
-    # projeta o filtro IIR de segunda ordem
     b, a = iirfilter(2, [f0 - f0/(2*Q), f0 + f0/(2*Q)], rs=60, btype='bandstop', fs=fs, output='ba')
-    
-    # aplica o filtro separadamente em I e Q
     I_filtered = lfilter(b, a, np.real(signal))
     Q_filtered = lfilter(b, a, np.imag(signal))
-    
     return I_filtered + 1j * Q_filtered
 
 def normalize_by_power(signal):
-    power = np.mean(np.abs(signal)**2) # normaliza o sinal
+    power = np.mean(np.abs(signal)**2)
     if power > 1e-12: 
         return signal / np.sqrt(power)
     return signal
 
-# função de leitura
 def read_iq_data(file_path, start_offset_samples, count_samples):
-
-    #le os dados IQ de um arquivo binário de int16, com offset
-    bytes_per_iq_pair = 4 
+    bytes_per_iq_pair = 2
     start_offset_bytes = start_offset_samples * bytes_per_iq_pair
-    count_int16 = 2 * count_samples
+    count_int8 = 2 * count_samples
     
     try:
         with open(file_path, "rb") as f:
             f.seek(start_offset_bytes)
-            raw = np.fromfile(f, dtype=np.int16, count=count_int16)
+            raw = np.fromfile(f, dtype=np.int8, count=count_int8)
         
-        if raw.size < count_int16:
+        if raw.size < count_int8:
              return None 
              
         I = raw[0::2].astype(np.float32)
@@ -66,7 +51,6 @@ def read_iq_data(file_path, start_offset_samples, count_samples):
         return None
 
 def generate_ca_code(prn_number):
-    .
     g2_shifts = {
         1: (2,6), 2: (3,7), 3: (4,8), 4: (5,9), 5: (1,9),
         6: (2,10), 7: (1,8), 8: (2,9), 9: (3,10), 10: (2,3),
@@ -92,28 +76,22 @@ def generate_ca_code(prn_number):
         g2 = np.roll(g2, 1); g2[0] = new_g2
     return 1 - 2*ca
     
-# exemplo de preprocessamento
-
-# tenta carregar o arquivo
 dat_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.bin', '.dat'))]
 
 if not dat_files:
-     raise SystemExit("Nenhum arquivo de dados TEXBAT (.bin ou .dat) encontrado.")
+     raise SystemExit("Nenhum arquivo de dados (.bin ou .dat) encontrado. VERIFIQUE O CAMINHO.")
 
 selected_file = os.path.join(folder_path, dat_files[0])
 signal_original = read_iq_data(selected_file, 0, num_samples_per_segment)
 
 if signal_original is not None:
-    
     t = np.arange(signal_original.size) / fs
     mixer = np.exp(-1j * 2 * np.pi * (center_freq + test_doppler_freq) * t)
     signal_mixed = signal_original * mixer
     
-    
     f_rfi = 1e6 
     print(f" Aplicando Filtro Notch em {f_rfi/1e6:.1f} MHz para suprimir RFI...")
     signal_filtered = apply_notch_filter(signal_mixed, fs, f_rfi, Q=30)
-    
     
     signal_processed = normalize_by_power(signal_filtered)
     
@@ -121,23 +99,20 @@ if signal_original is not None:
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle('Pré-Processamento: Espectro e Normalização', fontsize=16, fontweight='bold')
     
-    # Espectro Original 
-    freqs = fftfreq(len(signal_mixed), 1/fs)
     fft_orig = np.abs(fft(signal_mixed))
+    freqs = fftfreq(len(signal_mixed), 1/fs)
     mask = freqs > 0
     axes[0,0].semilogy(freqs[mask]/1e6, fft_orig[mask], 'b-', linewidth=0.8)
     axes[0,0].set_title('Espectro - Sinal Misturado (Original)')
     axes[0,0].set_xlabel('Frequência (MHz)'); axes[0,0].set_ylabel('Magnitude')
     axes[0,0].grid(True, alpha=0.3)
     
-    # Espectro Filtrado 
     fft_filt = np.abs(fft(signal_filtered))
     axes[0,1].semilogy(freqs[mask]/1e6, fft_filt[mask], 'g-', linewidth=0.8)
     axes[0,1].set_title(f'Espectro - Sinal Filtrado (Notch em {f_rfi/1e6:.1f} MHz)')
     axes[0,1].set_xlabel('Frequência (MHz)'); axes[0,1].set_ylabel('Magnitude')
     axes[0,1].grid(True, alpha=0.3)
 
-    # Distribuição Antes e Depois da Normalização
     axes[1,0].hist(np.real(signal_filtered), bins=50, alpha=0.7, color='blue', density=True, label='Antes (Re)')
     axes[1,0].hist(np.real(signal_processed), bins=50, alpha=0.7, color='red', density=True, label='Depois (Re)')
     axes[1,0].set_title('Normalização (Distribuição Real)')
@@ -145,7 +120,6 @@ if signal_original is not None:
     axes[1,0].legend()
     axes[1,0].grid(True, alpha=0.3)
     
-    # Estatísticas de Potência
     P_filt = np.mean(np.abs(signal_filtered)**2)
     P_proc = np.mean(np.abs(signal_processed)**2)
     axes[1,1].bar(['Antes (P={:.2e})'.format(P_filt), 'Depois (P={:.2e})'.format(P_proc)], [P_filt, P_proc], color=['blue', 'red'])
