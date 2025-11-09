@@ -6,26 +6,27 @@ from typing import Tuple, Optional, Dict
 from scipy.fft import fft, fftfreq
 
 folder_path = r"Caminho/DO_ARQUIVO_BINARIO"
-fs = 26e6
+fs = 5e6
 prn_to_track = 1                
 ca_chip_rate = 1.023e6
 
 segment_duration_s = 0.5
 num_samples_per_segment = int(fs * segment_duration_s)
-SPOOF_START_TIME_S = 60.0      
-TOTAL_SAMPLES_IQ_S = int(120 * fs)
+SPOOF_START_TIME_S = 17.0      
+TOTAL_SAMPLES_IQ_S = int(60 * fs)
 
 def read_iq_data(file_path, start_offset_samples, count_samples):
-    bytes_per_iq_pair = 2
+    
+    bytes_per_iq_pair = 4
     start_offset_bytes = start_offset_samples * bytes_per_iq_pair
-    count_int8 = 2 * count_samples
+    count_int16 = 2 * count_samples 
     
     try:
         with open(file_path, "rb") as f:
             f.seek(start_offset_bytes)
-            raw = np.fromfile(f, dtype=np.int8, count=count_int8)
+            raw = np.fromfile(f, dtype=np.int16, count=2 * count_samples)
         
-        if raw.size < count_int8:
+        if raw.size < count_int16:
              return None 
              
         I = raw[0::2].astype(np.float32)
@@ -65,12 +66,14 @@ def normalize_by_power(signal):
     power = np.mean(np.abs(signal)**2)
     return signal / np.sqrt(power) if power > 1e-12 else signal
 
-def generate_local_code_oversampled(prn_number: int, fs: float, samples_in_segment: int, ca_chip_rate: float = 1.023e6) -> np.ndarray:
-    ca_code = generate_ca_code(prn_number)
-    samples_per_chip = round(fs / ca_chip_rate)
-    replicated_ca_full = np.tile(ca_code, 2)
-    replicated_ca_full = np.repeat(replicated_ca_full, samples_per_chip)
-    return replicated_ca_full[:samples_in_segment]
+def generate_local_code_oversampled(prn_number: int, fs: float, samples_in_segment: int, ca_chip_rate: float = 1.023e6):
+    ca = generate_ca_code(prn_number)
+    samples_per_chip = int(fs // ca_chip_rate)
+    local_code = np.repeat(ca, samples_per_chip)
+
+    repeats = int(np.ceil(samples_in_segment / len(local_code)))
+    local_code = np.tile(local_code, repeats)
+    return local_code[:samples_in_segment]
 
 def extract_correlation_sqms(corr_magnitude: np.ndarray, samples_per_chip: int) -> Dict[str, float]:
     peak_index = np.argmax(corr_magnitude)

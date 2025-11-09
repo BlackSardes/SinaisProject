@@ -3,10 +3,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 import numpy as np
+import pandas as pd 
 
 if 'features_df_all' not in locals() or features_df_all.empty:
     print("ERRO: O DataFrame de características está vazio. Execute o Módulo 2 primeiro para carregar features_df_all.")
-
 else:
     X = features_df_all[['power_c_n0', 'sqm_peak_to_secondary', 'sqm_fpw', 'sqm_asymmetry']].values
     y = features_df_all['label'].values

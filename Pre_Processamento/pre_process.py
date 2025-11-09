@@ -5,7 +5,7 @@ from scipy.signal import iirfilter, lfilter
 from scipy.fft import fft, fftfreq
 
 folder_path = r"Caminho/DO_ARQUIVO_BINARIO"
-fs = 26e6
+fs = 5e6
 prn_to_track = 1                
 center_freq = 0e6
 test_doppler_freq = 0
@@ -14,7 +14,7 @@ ca_chip_rate = 1.023e6
 segment_duration_s = 0.5
 num_samples_per_segment = int(fs * segment_duration_s)
 
-SPOOF_START_TIME_S = 60.0
+SPOOF_START_TIME_S = 17.0
 
 def apply_notch_filter(signal, fs, f0, Q):
     b, a = iirfilter(2, [f0 - f0/(2*Q), f0 + f0/(2*Q)], rs=60, btype='bandstop', fs=fs, output='ba')
@@ -29,16 +29,16 @@ def normalize_by_power(signal):
     return signal
 
 def read_iq_data(file_path, start_offset_samples, count_samples):
-    bytes_per_iq_pair = 2
+    bytes_per_iq_pair = 4
     start_offset_bytes = start_offset_samples * bytes_per_iq_pair
-    count_int8 = 2 * count_samples
+    count_int16 = 2 * count_samples
     
     try:
         with open(file_path, "rb") as f:
             f.seek(start_offset_bytes)
-            raw = np.fromfile(f, dtype=np.int8, count=count_int8)
+            raw = np.fromfile(f, dtype=np.int16, count=count_int16)
         
-        if raw.size < count_int8:
+        if raw.size < count_int16:
              return None 
              
         I = raw[0::2].astype(np.float32)
