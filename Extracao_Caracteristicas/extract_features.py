@@ -7,64 +7,44 @@ from scipy.fft import fft, fftfreq
 import time as time_module
 from typing import Tuple, Optional, Dict, Any
 
-# =====================================================================
-# CONFIGURAÇÕES E PARÂMETROS GLOBAIS (TEXBAT)
-# =====================================================================
+folder_path = r"Caminho/TEXBAT"  # caminho do arquivo
 
-# --- AJUSTE O CAMINHO DA PASTA AQUI ---
-folder_path = r"Caminho/TEXBAT"  # MUDAR PARA O CAMINHO REAL DOS ARQUIVOS .BIN/.DAT
-# -------------------------------------
 
-fs = 25e6                      # Taxa de amostragem em Hz (25 MHz para TEXBAT)
-prn_to_track = 1                # Satélite PRN a ser rastreado/analisado
-ca_chip_rate = 1.023e6          # Taxa do código C/A
+fs = 25e6                      # taxa de amostragem em Hz
+prn_to_track = 1                # satélite PRN a ser analisado
+ca_chip_rate = 1.023e6          # taxa do código C/A
 
-# --- JANELAMENTO E ROTULAGEM ---
-segment_duration_s = 0.5        # Duração de cada segmento (janela) em segundos
+# janelamento
+segment_duration_s = 0.5        # duração de cada segmento (janela) em segundos
 num_samples_per_segment = int(fs * segment_duration_s)
-SPOOF_START_TIME_S = 150.0      # Tempo de corte para rotulagem (Autêntico/Spoofed)
-
-# =====================================================================
-# FUNÇÕES DE SUPORTE (MOCKAGEM/SIMPLIFICAÇÃO DO MÓDULO I)
-# Estas são necessárias para que a lógica do Módulo II funcione.
-# =====================================================================
+SPOOF_START_TIME_S = 150.0      # tempo de corte para rotulagem 
 
 def read_iq_data(file_path, start_offset_samples, count_samples):
-    """[SIMPLIFICADO] Simula a leitura de dados IQ complexos. (CRÍTICA)"""
-    # Se o arquivo não existe, o loop deve falhar ou retornar None
+    
     if not os.path.exists(file_path) or count_samples <= 0:
         return None
     
-    # Simula a leitura de dados I/Q complexos (Ruído aleatório)
     return np.random.randn(count_samples) + 1j * np.random.randn(count_samples)
 
 def generate_ca_code(prn_number):
-    """Gera sequência 1023 chips (+1/-1) para o PRN especificado (necessário para correlação)."""
-    # Simulação de um código PRN
+    
     return 1 - 2 * np.random.randint(0, 2, 1023)
 
-# Funções de Pré-Processamento (MOCKADAS)
 def apply_frequency_correction(signal, fs, freq_correction): return signal
 def apply_pulse_blanking(signal): return signal
 def apply_fdpb_filter(signal): return signal
 def normalize_by_power(signal):
-    """[SIMPLIFICADO] Normaliza o sinal por sua potência."""
     power = np.mean(np.abs(signal)**2)
     return signal / np.sqrt(power) if power > 1e-12 else signal
 
-# =====================================================================
-# MÓDULO II: FUNÇÕES DE EXTRAÇÃO (SQM)
-# =====================================================================
-
 def generate_local_code_oversampled(prn_number: int, fs: float, samples_in_segment: int, ca_chip_rate: float = 1.023e6) -> np.ndarray:
-    """Gera o código PRN local reamostrado para a correlação."""
+    
     ca_code = generate_ca_code(prn_number)
     samples_per_chip = round(fs / ca_chip_rate)
     replicated_ca_full = np.repeat(ca_code, samples_per_chip)
     return replicated_ca_full[:samples_in_segment]
 
 def extract_correlation_sqms(corr_magnitude: np.ndarray, samples_per_chip: int) -> Dict[str, float]:
-    """Extrai as Métricas de Qualidade do Sinal (SQMs) do perfil de correlação (CRÍTICA)."""
     
     peak_index = np.argmax(corr_magnitude)
     peak_value = corr_magnitude[peak_index]
@@ -73,7 +53,6 @@ def extract_correlation_sqms(corr_magnitude: np.ndarray, samples_per_chip: int) 
     peak_window_samples = int(2 * samples_per_chip)
     temp_corr = corr_magnitude.copy()
     
-    # Zera a vizinhança do pico para encontrar o secundário (circular)
     temp_corr = np.roll(temp_corr, -peak_index) 
     temp_corr[:peak_window_samples] = 0         
     temp_corr = np.roll(temp_corr, peak_index) 
@@ -100,7 +79,6 @@ def extract_correlation_sqms(corr_magnitude: np.ndarray, samples_per_chip: int) 
     }
 
 def extract_power_metrics(signal_processed: np.ndarray, peak_value: float, secondary_peak_value: float, fs: float) -> Dict[str, float]:
-    """Extrai métricas relacionadas à potência e ao ruído do sinal (CRÍTICA)."""
     
     # 1. Potência do Ruído (Noise Floor Power)
     total_power = np.mean(np.abs(signal_processed)**2)
@@ -123,7 +101,6 @@ def extract_power_metrics(signal_processed: np.ndarray, peak_value: float, secon
     }
 
 def load_and_label_segment(file_path: str, segment_index: int, segment_size: int, fs: float) -> Tuple[Optional[np.ndarray], int]:
-    """Carrega o segmento e determina o rótulo (0=Autêntico, 1=Spoofed)."""
     
     signal = read_iq_data(file_path, segment_index, segment_size)
     
@@ -139,20 +116,14 @@ def load_and_label_segment(file_path: str, segment_index: int, segment_size: int
 
     return signal, label
 
-# =====================================================================
-# PIPELINE DE PRODUÇÃO (LOOP PRINCIPAL DO MÓDULO II)
-# =====================================================================
 
 def run_feature_extraction_pipeline():
-    """Executa o pipeline completo de extração de features."""
 
     features_df_all = pd.DataFrame()
     
-    # Tenta listar arquivos. Se a pasta não existir (como no mock), usa uma lista de strings.
     try:
         dat_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.bin', '.dat'))]
     except FileNotFoundError:
-        # Usar arquivos mock para que o loop de produção funcione
         dat_files = ['cleanstatic.bin', 'ds1.bin', 'ds1.bin'] 
         print("AVISO: Pasta não encontrada. Usando nomes de arquivo MOCK para teste de lógica.")
         
@@ -166,53 +137,47 @@ def run_feature_extraction_pipeline():
     for idx_file, filename in enumerate(dat_files):
         file_path = os.path.join(folder_path, filename)
         
-        # Simulação: Como read_iq_data é mockado, precisamos simular um número de amostras grande (420s)
         total_samples_iq_simulado = int(420 * fs) 
         
-        # Gera o código local de referência
         local_code = generate_local_code_oversampled(prn_to_track, fs, num_samples_per_segment)
         
         for segment_index in range(0, total_samples_iq_simulado, num_samples_per_segment):
             
-            # 1. CARREGAMENTO E ROTULAGEM
             signal, label = load_and_label_segment(file_path, segment_index, num_samples_per_segment, fs)
             if signal is None or signal.size < num_samples_per_segment:
                 continue
                 
-            # 2. PRÉ-PROCESSAMENTO (MOCK)
             signal_mixed = apply_frequency_correction(signal, fs, 0)
             signal_processed = normalize_by_power(signal_mixed) # Skip PB/FDPB mocks
             
-            # 3. CORRELAÇÃO CIRCULAR (FFT)
             fft_signal = np.fft.fft(signal_processed)
             fft_code = np.fft.fft(local_code)
             corr_fft = fft_signal * np.conj(fft_code)
             corr_magnitude = np.abs(np.fft.ifft(corr_fft))
             
-            # 4. EXTRAÇÃO DE FEATURES (SQMs e Potência)
             samples_per_chip = round(fs / ca_chip_rate)
             sqm_features = extract_correlation_sqms(corr_magnitude, samples_per_chip)
             power_features = extract_power_metrics(signal_processed, sqm_features['sqm_peak_value'], sqm_features['sqm_secondary_peak_value'], fs)
             
-            # 5. COMBINAR E ARMAZENAR
             features_completas = {
                 "filename": filename,
                 "segment_start_s": segment_index / fs,
                 "prn": prn_to_track,
                 "label": label
             }
+
             features_completas.update(sqm_features)
             features_completas.update(power_features)
             
             new_row = pd.DataFrame([features_completas])
             features_df_all = pd.concat([features_df_all, new_row], ignore_index=True)
             
-            # Parar o loop de segmento após alguns para o mock (evita rodar 420s de mock)
             if len(features_df_all) > 50 and filename != 'cleanstatic.bin': break
 
         print(f"  Arquivo {idx_file+1}/{len(dat_files)} ({filename}) processado. Total de features: {len(features_df_all)}")
         
     tempo_total = time_module.time() - start_time_completo
+
     print("\n" + "="*70)
     print("MÓDULO II: EXTRAÇÃO DE CARACTERÍSTICAS CONCLUÍDA")
     print(f"Tempo Total de Execução: {tempo_total:.2f} segundos.")
@@ -223,10 +188,6 @@ def run_feature_extraction_pipeline():
         print(features_df_all.head().to_string())
     
     return features_df_all
-
-# =====================================================================
-# INÍCIO DA EXECUÇÃO
-# =====================================================================
 
 if __name__ == '__main__':
     df_results = run_feature_extraction_pipeline()

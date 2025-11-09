@@ -7,55 +7,43 @@ from scipy.signal import correlate, iirfilter, lfilter, butter
 import pandas as pd
 from scipy.fft import fft, fftfreq
 
-# --- PARÂMETROS GLOBAIS DO TEXBAT ---
+# parametros globais 
 folder_path = r"Caminho/TEXBAT"  # MUDAR: Pasta com ds1.bin, ds2.bin, etc.
 fs = 25e6                      # Taxa de amostragem em Hz (25 MHz para TEXBAT)
-prn_to_track = 1                # Focar no PRN 1
+prn_to_track = 1                
 center_freq = 0e6               # Frequência central (IF)
 test_doppler_freq = 0           # Início da busca Doppler (0 Hz para teste)
 ca_chip_rate = 1.023e6
 
-# --- Janelamento de Dados ---
+# janelamento de dados
 segment_duration_s = 0.5        # Duração de cada segmento (janela) em segundos
 num_samples_per_segment = int(fs * segment_duration_s)
 
-# --- MAPA DE ROTULAGEM (LABELING) DO TEXBAT (SIMPLIFICADO) ---
 SPOOF_START_TIME_S = 150.0
 
-# --- FUNÇÕES DE PRÉ-PROCESSAMENTO AVANÇADO ---
+# funçoes de preprocessamento 
 
 def apply_notch_filter(signal, fs, f0, Q):
-    """
-    Aplica um filtro Notch IIR (Band-stop) para remover interferência de banda estreita (RFI).
-    
-    Args:
-        signal (np.array): Sinal complexo (I + 1j*Q).
-        fs (float): Frequência de amostragem.
-        f0 (float): Frequência central do notch (onde a RFI está).
-        Q (float): Fator de Qualidade (define a largura da banda de corte).
-    
-    Returns:
-        np.array: Sinal filtrado.
-    """
-    # Projeta o filtro IIR de segunda ordem (ordem=2)
+
+    # projeta o filtro IIR de segunda ordem
     b, a = iirfilter(2, [f0 - f0/(2*Q), f0 + f0/(2*Q)], rs=60, btype='bandstop', fs=fs, output='ba')
     
-    # Aplica o filtro separadamente em I e Q
+    # aplica o filtro separadamente em I e Q
     I_filtered = lfilter(b, a, np.real(signal))
     Q_filtered = lfilter(b, a, np.imag(signal))
     
     return I_filtered + 1j * Q_filtered
 
 def normalize_by_power(signal):
-    """Normaliza o sinal de forma que sua potência média seja 1 (ou 0 dB)."""
-    power = np.mean(np.abs(signal)**2)
-    if power > 1e-12: # Evita divisão por zero
+    power = np.mean(np.abs(signal)**2) # normaliza o sinal
+    if power > 1e-12: 
         return signal / np.sqrt(power)
     return signal
 
-# Função de Leitura (Mantida)
+# função de leitura
 def read_iq_data(file_path, start_offset_samples, count_samples):
-    """Lê dados IQ de um arquivo binário de int16, com offset (para janelamento)."""
+
+    #le os dados IQ de um arquivo binário de int16, com offset
     bytes_per_iq_pair = 4 
     start_offset_bytes = start_offset_samples * bytes_per_iq_pair
     count_int16 = 2 * count_samples
@@ -78,7 +66,7 @@ def read_iq_data(file_path, start_offset_samples, count_samples):
         return None
 
 def generate_ca_code(prn_number):
-    # ... (Sua função de geração de código C/A - Mantida) ...
+    .
     g2_shifts = {
         1: (2,6), 2: (3,7), 3: (4,8), 4: (5,9), 5: (1,9),
         6: (2,10), 7: (1,8), 8: (2,9), 9: (3,10), 10: (2,3),
@@ -90,10 +78,12 @@ def generate_ca_code(prn_number):
     }
     if prn_number not in g2_shifts:
         raise ValueError("PRN fora do intervalo (1-32) neste gerador simplificado.")
+
     s1, s2 = g2_shifts[prn_number]
     g1 = np.ones(10, dtype=int)
     g2 = np.ones(10, dtype=int)
     ca = np.zeros(1023, dtype=int)
+
     for i in range(1023):
         ca[i] = (g1[-1] ^ (g2[-s1] ^ g2[-s2]))
         new_g1 = g1[2] ^ g1[9]
@@ -102,35 +92,36 @@ def generate_ca_code(prn_number):
         g2 = np.roll(g2, 1); g2[0] = new_g2
     return 1 - 2*ca
     
-# --- Demostração de Pré-Processamento no Primeiro Segmento (Visualização) ---
+# exemplo de preprocessamento
 
-# Tente carregar o primeiro segmento do primeiro arquivo
+# tenta carregar o arquivo
 dat_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.bin', '.dat'))]
+
 if not dat_files:
      raise SystemExit("Nenhum arquivo de dados TEXBAT (.bin ou .dat) encontrado.")
+
 selected_file = os.path.join(folder_path, dat_files[0])
 signal_original = read_iq_data(selected_file, 0, num_samples_per_segment)
 
 if signal_original is not None:
-    # 1. Correção de Frequência (Beating Frequency Removal)
+    
     t = np.arange(signal_original.size) / fs
     mixer = np.exp(-1j * 2 * np.pi * (center_freq + test_doppler_freq) * t)
     signal_mixed = signal_original * mixer
     
-    # 2. Filtragem RFI (Exemplo: Filtro Notch em 1 MHz)
-    # RFI é comum no GNSS, especialmente se a banda for gravada.
-    f_rfi = 1e6 # Hipótese de uma RFI em 1 MHz
+    
+    f_rfi = 1e6 
     print(f" Aplicando Filtro Notch em {f_rfi/1e6:.1f} MHz para suprimir RFI...")
     signal_filtered = apply_notch_filter(signal_mixed, fs, f_rfi, Q=30)
     
-    # 3. Normalização de Potência
+    
     signal_processed = normalize_by_power(signal_filtered)
     
-    print("\n--- Visualização do Pré-Processamento ---")
+    print("\nExemplo do Pré-Processamento")
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle('Pré-Processamento: Espectro e Normalização', fontsize=16, fontweight='bold')
     
-    # Espectro Original (Após Mixagem)
+    # Espectro Original 
     freqs = fftfreq(len(signal_mixed), 1/fs)
     fft_orig = np.abs(fft(signal_mixed))
     mask = freqs > 0
@@ -139,7 +130,7 @@ if signal_original is not None:
     axes[0,0].set_xlabel('Frequência (MHz)'); axes[0,0].set_ylabel('Magnitude')
     axes[0,0].grid(True, alpha=0.3)
     
-    # Espectro Filtrado (Após Notch)
+    # Espectro Filtrado 
     fft_filt = np.abs(fft(signal_filtered))
     axes[0,1].semilogy(freqs[mask]/1e6, fft_filt[mask], 'g-', linewidth=0.8)
     axes[0,1].set_title(f'Espectro - Sinal Filtrado (Notch em {f_rfi/1e6:.1f} MHz)')
