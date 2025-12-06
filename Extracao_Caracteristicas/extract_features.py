@@ -5,7 +5,7 @@ import time as time_module
 from typing import Tuple, Optional, Dict
 from scipy.fft import fft, fftfreq
 
-folder_path = r"Caminho/DO_ARQUIVO_BINARIO"
+folder_path = r"../Data"
 fs = 5e6
 prn_to_track = 1                
 ca_chip_rate = 1.023e6
