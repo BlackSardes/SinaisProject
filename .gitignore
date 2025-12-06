@@ -1,2 +1,72 @@
 Data/
 Extracao_Caracteristicas/.env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data files (binary/large files)
+*.bin
+*.dat
+*.mat
+data/*
+!data/.gitkeep
+
+# Model files
+*.pkl
+*.joblib
+models/*.pkl
+models/*.joblib
+!models/.gitkeep
+
+# Results
+results/
+*.png
+*.jpg
+*.pdf
+!docs/*.png
+!docs/*.jpg
+
+# OS
+.DS_Store
+Thumbs.db
