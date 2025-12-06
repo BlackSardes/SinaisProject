@@ -275,7 +275,8 @@ def save_results(model, metrics, imputer, scaler, feature_cols, args, df_feature
         if isinstance(value, np.ndarray):
             metrics_clean[key] = value.tolist()
         elif isinstance(value, (np.integer, np.floating)):
-            metrics_clean[key] = float(value)
+            # Use .item() for scalar numpy values
+            metrics_clean[key] = value.item() if hasattr(value, 'item') else float(value)
         else:
             metrics_clean[key] = value
     

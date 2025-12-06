@@ -110,7 +110,8 @@ def extract_correlation_features(corr_profile: np.ndarray, fs: float,
     features['fwhm'] = int(fwhm)
     
     # Fractional Peak Width at 80% (from extract_features.py)
-    frac_level = 0.8 * peak_value
+    FRACTIONAL_PEAK_THRESHOLD = 0.8
+    frac_level = FRACTIONAL_PEAK_THRESHOLD * peak_value
     above_frac = np.where(corr_profile > frac_level)[0]
     fpw = above_frac[-1] - above_frac[0] if above_frac.size > 0 else 0
     features['fpw'] = int(fpw)

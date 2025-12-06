@@ -145,7 +145,8 @@ def evaluate_model(model: Any, X: np.ndarray, y: np.ndarray,
             roc_auc = roc_auc_score(y, y_proba)
         else:
             roc_auc = None
-    except:
+    except (ValueError, AttributeError, IndexError) as e:
+        # Handle cases where predict_proba fails or output shape is unexpected
         roc_auc = None
     
     # Classification report

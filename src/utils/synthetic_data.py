@@ -117,12 +117,16 @@ def generate_synthetic_dataset(num_authentic: int = 100, num_spoofed: int = 100,
     labels = []
     metadata = []
     
+    # GPS signal constants
+    GPS_DOPPLER_MIN = -5000  # Hz
+    GPS_DOPPLER_MAX = 5000   # Hz
+    
     # Generate authentic signals
     print(f"Generating {num_authentic} authentic signals...")
     for i in range(num_authentic):
         prn = np.random.randint(prn_range[0], prn_range[1] + 1)
         cn0 = np.random.uniform(40, 50)  # Typical C/N0 range
-        doppler = np.random.uniform(-5000, 5000)  # Doppler range in Hz
+        doppler = np.random.uniform(GPS_DOPPLER_MIN, GPS_DOPPLER_MAX)
         
         signal = generate_synthetic_gps_signal(
             prn=prn, fs=fs, duration=duration,
@@ -144,7 +148,7 @@ def generate_synthetic_dataset(num_authentic: int = 100, num_spoofed: int = 100,
     for i in range(num_spoofed):
         prn = np.random.randint(prn_range[0], prn_range[1] + 1)
         cn0 = np.random.uniform(45, 55)  # Higher C/N0 for spoofing
-        doppler = np.random.uniform(-5000, 5000)
+        doppler = np.random.uniform(GPS_DOPPLER_MIN, GPS_DOPPLER_MAX)
         
         # Random spoofing parameters
         spoof_params = {

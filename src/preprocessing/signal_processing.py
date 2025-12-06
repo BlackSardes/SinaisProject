@@ -435,8 +435,7 @@ def estimate_cn0_from_signal(signal: np.ndarray, fs: float,
         Otherwise, uses power-based estimation which is less accurate.
     """
     if prn_code is not None:
-        # Correlation-based estimation
-        from .signal_processing import generate_ca_code
+        # Correlation-based estimation (generate_ca_code is in this module)
         
         # Ensure PRN code matches signal length
         if len(prn_code) < len(signal):
