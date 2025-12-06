@@ -51,7 +51,10 @@ def load_signal(path: Union[str, Path]) -> Union[np.ndarray, Tuple[np.ndarray, d
             
             if signal_key is None:
                 # Get first non-metadata key
-                signal_key = [k for k in mat_data.keys() if not k.startswith('__')][0]
+                non_meta_keys = [k for k in mat_data.keys() if not k.startswith('__')]
+                if not non_meta_keys:
+                    raise ValueError("No valid signal data found in .mat file")
+                signal_key = non_meta_keys[0]
             
             signal = mat_data[signal_key]
             metadata = {k: v for k, v in mat_data.items() if k.startswith('__') or k != signal_key}

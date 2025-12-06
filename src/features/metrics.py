@@ -70,7 +70,7 @@ def fwhm(signal: np.ndarray, peak_idx: Union[int, None] = None) -> float:
     if right_idx > peak_idx and right_idx < len(signal):
         y1, y2 = np.abs(signal[right_idx - 1]), np.abs(signal[right_idx])
         if abs(y1 - y2) > 1e-12:
-            right_cross = right_idx - 1 + (half_max - y1) / (y2 - y1)
+            right_cross = right_idx - 1 + (y1 - half_max) / (y1 - y2)
         else:
             right_cross = right_idx
     else:
