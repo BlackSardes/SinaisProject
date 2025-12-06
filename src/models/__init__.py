@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """
 GPS Spoofing Classification Models Module
 
@@ -18,4 +19,15 @@ __all__ = [
     'save_model',
     'load_model',
     'get_classifier',
+=======
+"""Model training and evaluation module"""
+from .train import train_model, evaluate_model
+from .persistence import save_model, load_model
+
+__all__ = [
+    'train_model',
+    'evaluate_model',
+    'save_model',
+    'load_model',
+>>>>>>> main
 ]

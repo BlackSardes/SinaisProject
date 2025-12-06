@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """
 GPS Signal Preprocessing Module
 
@@ -28,4 +29,41 @@ __all__ = [
     'align_channels',
     'estimate_cn0_from_correlation',
     'estimate_cn0_from_signal',
+=======
+"""Preprocessing module for GPS signals"""
+from .signal_processing import (
+    load_signal,
+    normalize_signal,
+    bandpass_filter,
+    remove_dc,
+    resample_signal,
+    window_segment,
+    align_channels,
+    remove_outliers,
+    smooth_signal,
+    estimate_cn0_from_correlation,
+    estimate_cn0_from_signal,
+    read_iq_data,
+    generate_ca_code,
+    apply_frequency_correction,
+    normalize_by_power,
+)
+
+__all__ = [
+    'load_signal',
+    'normalize_signal',
+    'bandpass_filter',
+    'remove_dc',
+    'resample_signal',
+    'window_segment',
+    'align_channels',
+    'remove_outliers',
+    'smooth_signal',
+    'estimate_cn0_from_correlation',
+    'estimate_cn0_from_signal',
+    'read_iq_data',
+    'generate_ca_code',
+    'apply_frequency_correction',
+    'normalize_by_power',
+>>>>>>> main
 ]
