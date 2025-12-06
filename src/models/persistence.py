@@ -1,42 +1,55 @@
-"""Model persistence utilities using joblib."""
-
+"""
+Model persistence utilities.
+"""
 import joblib
-from pathlib import Path
-from typing import Any, Union
+import json
+import os
+from typing import Any, Dict, Optional
 
 
-def save_model(model: Any, path: Union[str, Path]) -> None:
+def save_model(model: Any, path: str, metadata: Optional[Dict] = None):
     """
     Save model to disk using joblib.
     
-    Parameters
-    ----------
-    model : Any
-        Model object to save (typically sklearn Pipeline)
-    path : str or Path
-        Path where to save the model
+    Args:
+        model: Trained model to save
+        path: Save path (with .pkl or .joblib extension)
+        metadata: Optional metadata to save alongside model
     """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Save model
     joblib.dump(model, path)
+    print(f"Model saved to: {path}")
+    
+    # Save metadata if provided
+    if metadata is not None:
+        meta_path = path.rsplit('.', 1)[0] + '_metadata.json'
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Metadata saved to: {meta_path}")
 
 
-def load_model(path: Union[str, Path]) -> Any:
+def load_model(path: str) -> Any:
     """
-    Load model from disk using joblib.
+    Load model from disk.
     
-    Parameters
-    ----------
-    path : str or Path
-        Path to the saved model
+    Args:
+        path: Path to saved model
     
-    Returns
-    -------
-    model : Any
-        Loaded model object
+    Returns:
+        Loaded model
     """
-    path = Path(path)
-    if not path.exists():
+    if not os.path.exists(path):
         raise FileNotFoundError(f"Model file not found: {path}")
     
-    return joblib.load(path)
+    model = joblib.load(path)
+    print(f"Model loaded from: {path}")
+    
+    # Try to load metadata
+    meta_path = path.rsplit('.', 1)[0] + '_metadata.json'
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r') as f:
+            metadata = json.load(f)
+        print(f"Metadata loaded from: {meta_path}")
+        return model, metadata
+    
+    return model

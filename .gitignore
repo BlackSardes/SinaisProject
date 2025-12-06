@@ -1,4 +1,15 @@
+# Data directories
 Data/
+data/*.bin
+data/*.dat
+data/*.mat
+data/*.csv
+
+# Virtual environments
+.env/
+.venv/
+venv/
+env/
 Extracao_Caracteristicas/.env/
 
 # Python
@@ -24,31 +35,30 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
-.venv/
-venv/
-ENV/
-env/
-
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb_checkpoints/
 
-# Data files
-data/*.mat
-data/*.csv
-data/*.bin
-data/*.dat
-
-# Model files
-*.pkl
-*.joblib
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Models and results
+*.pkl
+*.joblib
+models/saved_models/
+results/figures/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
