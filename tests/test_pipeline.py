@@ -3,6 +3,7 @@ Integration tests for complete pipeline.
 """
 import pytest
 import numpy as np
+import pandas as pd
 from src.utils.synthetic_data import (
     generate_synthetic_gps_signal,
     generate_synthetic_dataset,
@@ -156,7 +157,3 @@ def test_pipeline_reproducibility():
     
     # Should be identical
     pd.testing.assert_frame_equal(df1, df2)
-
-
-# Import pandas for test
-import pandas as pd
