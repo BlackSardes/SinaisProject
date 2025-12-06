@@ -278,7 +278,7 @@ def train_and_evaluate_models(df, args, output_dir):
     return models_results, test_results, comparison_df, feature_columns
 
 
-def generate_visualizations(df, models_results, test_results, comparison_df, feature_columns, output_dir, args):
+def generate_visualizations(df, models_results, test_results, comparison_df, feature_columns, X_test, y_test, output_dir, args):
     """Generate all visualizations."""
     print("\n" + "="*70)
     print("GENERATING VISUALIZATIONS")
@@ -325,11 +325,9 @@ def generate_visualizations(df, models_results, test_results, comparison_df, fea
                 save_path=str(figures_dir / f'{name}_confusion_matrix.png')
             )
         
-        # ROC curve
-        if hasattr(model, 'predict_proba'):
+        # ROC curve (use actual test data)
+        if hasattr(model, 'predict_proba') and X_test is not None:
             from src.models.evaluation import get_roc_curve_data
-            X_test = df[feature_columns].values[-int(len(df)*0.3):]
-            y_test = df['label'].values[-int(len(df)*0.3):]
             
             try:
                 fpr, tpr, _ = get_roc_curve_data(model, X_test, y_test)
@@ -339,8 +337,8 @@ def generate_visualizations(df, models_results, test_results, comparison_df, fea
                     model_name=name,
                     save_path=str(figures_dir / f'{name}_roc_curve.png')
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"    Warning: Could not generate ROC curve: {e}")
         
         # Feature importance (for Random Forest)
         if hasattr(model, 'feature_importances_'):
@@ -391,9 +389,15 @@ def main():
     )
     
     # Step 3: Generate visualizations
+    # Extract test data for visualizations
+    feature_cols = [col for col in df.columns if col not in ['label', 'segment_start_time', 'segment_index', 'prn', 'file_path']]
+    X = df[feature_cols].values
+    y = df['label'].values
+    _, X_test_viz, _, y_test_viz = create_train_test_split(X, y, test_size=0.3, random_state=args.random_state)
+    
     generate_visualizations(
         df, models_results, test_results, comparison_df,
-        feature_columns, output_dir, args
+        feature_columns, X_test_viz, y_test_viz, output_dir, args
     )
     
     print("\n" + "="*70)

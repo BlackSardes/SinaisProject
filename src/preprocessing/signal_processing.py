@@ -40,9 +40,8 @@ def normalize_signal(signal: np.ndarray, method: str = 'power') -> np.ndarray:
     """
     if method == 'power':
         power = np.mean(np.abs(signal) ** 2)
-        if power > 1e-12:
-            return signal / np.sqrt(power)
-        return signal
+        # Add epsilon to prevent division by very small numbers
+        return signal / np.sqrt(power + 1e-12)
     
     elif method == 'amplitude':
         max_amp = np.max(np.abs(signal))
@@ -440,7 +439,7 @@ def estimate_cn0_from_signal(
     # Noise power density = noise_power / bandwidth
     # For GPS, we use the sampling rate as a proxy for bandwidth
     cn0_linear = carrier_power / (noise_power / fs)
-    cn0_db = 10 * np.log10(cn0_linear)
+    cn0_db = 10 * np.log10(cn0_linear) if cn0_linear > 0 else -np.inf
     
     return float(cn0_db)
 
