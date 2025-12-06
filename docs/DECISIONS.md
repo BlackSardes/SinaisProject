@@ -1,3 +1,4 @@
+
 # Technical Decisions and Justifications
 
 This document explains the technical decisions made in the GPS Spoofing Detection project, with emphasis on the connection to Signal Processing and Machine Learning theory.
