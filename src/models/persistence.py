@@ -100,13 +100,11 @@ def _make_json_serializable(obj):
         return [_make_json_serializable(v) for v in obj]
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
-    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                          np.int16, np.int32, np.int64, np.uint8,
-                          np.uint16, np.uint32, np.uint64)):
+    elif isinstance(obj, np.integer):
         return int(obj)
-    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+    elif isinstance(obj, np.floating):
         return float(obj)
-    elif isinstance(obj, (np.bool_,)):
+    elif isinstance(obj, np.bool_):
         return bool(obj)
     else:
         return obj
