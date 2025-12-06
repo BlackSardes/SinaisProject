@@ -1,8 +1,32 @@
+<<<<<<< HEAD
+name: gps-spoofing
+=======
 name: sinaisproject
+>>>>>>> main
 channels:
   - conda-forge
   - defaults
 dependencies:
+<<<<<<< HEAD
+  - python=3.10
+  - numpy>=1.24.0
+  - scipy>=1.10.0
+  - pandas>=2.0.0
+  - scikit-learn>=1.3.0
+  - matplotlib>=3.7.0
+  - seaborn>=0.12.0
+  - jupyter>=1.0.0
+  - pytest>=7.4.0
+  - pip
+  - pip:
+    - imbalanced-learn>=0.11.0
+    - joblib>=1.3.0
+    - pytest-cov>=4.1.0
+    # Optional: Heavy dependencies (uncomment if needed)
+    # - tensorflow>=2.13.0
+    # - keras>=2.13.0
+    # - librosa>=0.10.0
+=======
   - python=3.9
   - numpy>=1.21.0
   - scipy>=1.7.0
@@ -18,3 +42,4 @@ dependencies:
   - pip:
     - imbalanced-learn>=0.9.0
     - librosa>=0.9.0
+>>>>>>> main
