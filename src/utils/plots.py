@@ -1,259 +1,518 @@
 """
-Visualization utilities for GPS spoofing detection.
+Visualization Module for GPS Spoofing Detection
+
+This module provides plotting functions for:
+- Correlation profiles
+- Feature distributions
+- Confusion matrices
+- ROC curves
+- Feature importance
+- C/N0 analysis
 """
+
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Optional, List, Dict
-import pandas as pd
-from sklearn.metrics import roc_curve, auc
+from typing import Optional, List, Tuple, Any
+from pathlib import Path
 
 
-def plot_correlation_profile(corr_profile: np.ndarray, fs: float, 
-                             title: str = "Correlation Profile",
-                             save_path: Optional[str] = None,
-                             figsize: tuple = (12, 6)):
+# Set default style
+sns.set_style("whitegrid")
+plt.rcParams['figure.dpi'] = 100
+plt.rcParams['savefig.dpi'] = 300
+plt.rcParams['font.size'] = 10
+
+
+def plot_correlation_profile(
+    correlation: np.ndarray,
+    samples_per_chip: int,
+    title: str = "Correlation Profile",
+    peak_index: Optional[int] = None,
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 5)
+) -> None:
     """
-    Plot correlation profile.
+    Plot correlation profile with peak highlighting.
     
-    Args:
-        corr_profile: Correlation magnitude array
-        fs: Sampling frequency (Hz)
-        title: Plot title
-        save_path: Path to save figure (None = don't save)
-        figsize: Figure size
+    Parameters
+    ----------
+    correlation : np.ndarray
+        Correlation magnitude array
+    samples_per_chip : int
+        Samples per chip for x-axis scaling
+    title : str, optional
+        Plot title
+    peak_index : int, optional
+        Index of peak (if None, auto-detect)
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size (width, height)
     """
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
     
-    # Time axis (in chips for GPS)
-    ca_chip_rate = 1.023e6
-    samples_per_chip = fs / ca_chip_rate
-    chips = np.arange(len(corr_profile)) / samples_per_chip
+    # Convert to chip units
+    x_chips = np.arange(len(correlation)) / samples_per_chip
     
-    ax.plot(chips, corr_profile, 'b-', linewidth=1.5)
-    ax.set_xlabel('Code Phase (chips)', fontsize=12)
-    ax.set_ylabel('Correlation Magnitude', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
+    # Plot correlation
+    ax.plot(x_chips, correlation, 'b-', linewidth=1.2, label='Correlation')
     
-    # Mark peak
-    peak_idx = np.argmax(corr_profile)
-    ax.plot(chips[peak_idx], corr_profile[peak_idx], 'ro', markersize=10, label='Peak')
+    # Highlight peak
+    if peak_index is None:
+        peak_index = np.argmax(correlation)
+    
+    peak_chip = peak_index / samples_per_chip
+    peak_value = correlation[peak_index]
+    
+    ax.plot(peak_chip, peak_value, 'r*', markersize=15, label=f'Peak ({peak_value:.2f})')
+    
+    # Mark half-maximum
+    half_max = peak_value / 2
+    ax.axhline(y=half_max, color='g', linestyle='--', alpha=0.5, label=f'FWHM level')
+    
+    # Labels
+    ax.set_xlabel('Code Phase (chips)')
+    ax.set_ylabel('Correlation Magnitude')
+    ax.set_title(title, fontweight='bold')
     ax.legend()
+    ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
     
-    return fig, ax
+    plt.show()
 
 
-def plot_feature_distributions(df: pd.DataFrame, features: List[str],
-                               label_col: str = 'label',
-                               save_path: Optional[str] = None,
-                               figsize: tuple = (15, 10)):
+def plot_feature_distributions(
+    df: pd.DataFrame,
+    features: List[str],
+    label_column: str = 'label',
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (15, 10)
+) -> None:
     """
-    Plot feature distributions by class.
+    Plot distributions of features by class.
     
-    Args:
-        df: Feature DataFrame
-        features: List of feature names to plot
-        label_col: Column name for labels
-        save_path: Path to save figure
-        figsize: Figure size
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with features and labels
+    features : list of str
+        Feature names to plot
+    label_column : str, optional
+        Name of label column
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
     """
     n_features = len(features)
     n_cols = 3
-    n_rows = (n_features + n_cols - 1) // n_cols
+    n_rows = int(np.ceil(n_features / n_cols))
     
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
     axes = axes.flatten() if n_features > 1 else [axes]
     
-    for i, feature in enumerate(features):
-        if i >= len(axes):
-            break
+    for idx, feature in enumerate(features):
+        ax = axes[idx]
         
-        ax = axes[i]
+        # Plot distributions for each class
+        for label in df[label_column].unique():
+            data = df[df[label_column] == label][feature]
+            label_name = 'Spoofed' if label == 1 else 'Authentic'
+            ax.hist(data, bins=30, alpha=0.6, label=label_name, density=True)
         
-        if label_col in df.columns:
-            for label in df[label_col].unique():
-                data = df[df[label_col] == label][feature].dropna()
-                label_name = 'Spoofed' if label == 1 else 'Authentic'
-                ax.hist(data, bins=30, alpha=0.6, label=label_name, density=True)
-            ax.legend()
-        else:
-            ax.hist(df[feature].dropna(), bins=30, alpha=0.7)
-        
-        ax.set_xlabel(feature, fontsize=10)
-        ax.set_ylabel('Density', fontsize=10)
+        ax.set_xlabel(feature)
+        ax.set_ylabel('Density')
+        ax.set_title(feature, fontweight='bold')
+        ax.legend()
         ax.grid(True, alpha=0.3)
     
     # Hide unused subplots
-    for i in range(len(features), len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.suptitle('Feature Distributions', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
-    
-    return fig, axes
-
-
-def plot_confusion_matrix(cm: np.ndarray, class_names: List[str] = None,
-                         title: str = "Confusion Matrix",
-                         save_path: Optional[str] = None,
-                         figsize: tuple = (8, 6)):
-    """
-    Plot confusion matrix with annotations.
-    
-    Args:
-        cm: Confusion matrix
-        class_names: List of class names
-        title: Plot title
-        save_path: Path to save figure
-        figsize: Figure size
-    """
-    if class_names is None:
-        class_names = ['Authentic', 'Spoofed']
-    
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
-    
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=class_names, yticklabels=class_names,
-                cbar=True, ax=ax)
-    
-    ax.set_xlabel('Predicted Label', fontsize=12)
-    ax.set_ylabel('True Label', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
+    for idx in range(n_features, len(axes)):
+        axes[idx].set_visible(False)
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
     
-    return fig, ax
+    plt.show()
 
 
-def plot_roc_curves(y_true: np.ndarray, y_scores: Dict[str, np.ndarray],
-                   title: str = "ROC Curves",
-                   save_path: Optional[str] = None,
-                   figsize: tuple = (10, 8)):
+def plot_confusion_matrix(
+    cm: np.ndarray,
+    class_names: List[str] = ['Authentic', 'Spoofed'],
+    title: str = 'Confusion Matrix',
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (8, 6)
+) -> None:
     """
-    Plot ROC curves for multiple models.
+    Plot confusion matrix as heatmap.
     
-    Args:
-        y_true: True labels
-        y_scores: Dictionary of {model_name: prediction_scores}
-        title: Plot title
-        save_path: Path to save figure
-        figsize: Figure size
+    Parameters
+    ----------
+    cm : np.ndarray
+        Confusion matrix (2x2 or NxN)
+    class_names : list of str, optional
+        Class names for labels
+    title : str, optional
+        Plot title
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
     """
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
     
-    for model_name, scores in y_scores.items():
-        fpr, tpr, _ = roc_curve(y_true, scores)
-        roc_auc = auc(fpr, tpr)
-        ax.plot(fpr, tpr, linewidth=2, label=f'{model_name} (AUC = {roc_auc:.3f})')
+    # Create heatmap
+    sns.heatmap(
+        cm, annot=True, fmt='d', cmap='Blues',
+        xticklabels=class_names,
+        yticklabels=class_names,
+        cbar=True,
+        square=True,
+        ax=ax
+    )
     
-    # Diagonal line
-    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random')
+    ax.set_ylabel('True Label', fontweight='bold')
+    ax.set_xlabel('Predicted Label', fontweight='bold')
+    ax.set_title(title, fontweight='bold', pad=20)
     
-    ax.set_xlabel('False Positive Rate', fontsize=12)
-    ax.set_ylabel('True Positive Rate', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
+    
+    plt.show()
+
+
+def plot_roc_curve(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    roc_auc: float,
+    model_name: str = "Model",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (8, 6)
+) -> None:
+    """
+    Plot ROC curve.
+    
+    Parameters
+    ----------
+    fpr : np.ndarray
+        False positive rates
+    tpr : np.ndarray
+        True positive rates
+    roc_auc : float
+        ROC AUC score
+    model_name : str, optional
+        Model name for legend
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Plot ROC curve
+    ax.plot(fpr, tpr, 'b-', linewidth=2, label=f'{model_name} (AUC = {roc_auc:.3f})')
+    
+    # Plot diagonal (random classifier)
+    ax.plot([0, 1], [0, 1], 'r--', linewidth=1, label='Random Classifier')
+    
+    ax.set_xlabel('False Positive Rate', fontweight='bold')
+    ax.set_ylabel('True Positive Rate', fontweight='bold')
+    ax.set_title('ROC Curve', fontweight='bold', pad=20)
     ax.legend(loc='lower right')
     ax.grid(True, alpha=0.3)
+    ax.set_xlim([0.0, 1.0])
+    ax.set_ylim([0.0, 1.05])
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
     
-    return fig, ax
+    plt.show()
 
 
-def plot_cn0_by_channel(cn0_values: Dict[str, List[float]], 
-                       time_axis: Optional[np.ndarray] = None,
-                       title: str = "C/N0 Over Time by Channel",
-                       save_path: Optional[str] = None,
-                       figsize: tuple = (14, 6)):
+def plot_multiple_roc_curves(
+    roc_data: dict,
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (10, 7)
+) -> None:
     """
-    Plot C/N0 values over time for different channels/PRNs.
+    Plot multiple ROC curves for comparison.
     
-    Args:
-        cn0_values: Dictionary of {channel_name: [cn0_values]}
-        time_axis: Optional time axis (seconds)
-        title: Plot title
-        save_path: Path to save figure
-        figsize: Figure size
+    Parameters
+    ----------
+    roc_data : dict
+        Dictionary mapping model names to (fpr, tpr, auc) tuples
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
     """
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
     
-    for channel_name, values in cn0_values.items():
-        if time_axis is None:
-            x = np.arange(len(values))
-            xlabel = 'Sample Index'
-        else:
-            x = time_axis[:len(values)]
-            xlabel = 'Time (s)'
-        
-        ax.plot(x, values, linewidth=2, marker='o', markersize=4, label=channel_name)
+    colors = plt.cm.Set2(np.linspace(0, 1, len(roc_data)))
     
-    ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel('C/N0 (dB-Hz)', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
+    for (name, (fpr, tpr, auc)), color in zip(roc_data.items(), colors):
+        ax.plot(fpr, tpr, linewidth=2, color=color, label=f'{name} (AUC = {auc:.3f})')
+    
+    # Plot diagonal
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random Classifier')
+    
+    ax.set_xlabel('False Positive Rate', fontweight='bold')
+    ax.set_ylabel('True Positive Rate', fontweight='bold')
+    ax.set_title('ROC Curve Comparison', fontweight='bold', pad=20)
+    ax.legend(loc='lower right')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([0.0, 1.0])
+    ax.set_ylim([0.0, 1.05])
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
+    
+    plt.show()
+
+
+def plot_feature_importance(
+    importance_df: pd.DataFrame,
+    top_n: int = 20,
+    title: str = "Feature Importance",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (10, 8)
+) -> None:
+    """
+    Plot feature importance as horizontal bar chart.
+    
+    Parameters
+    ----------
+    importance_df : pd.DataFrame
+        DataFrame with 'feature' and 'importance' columns
+    top_n : int, optional
+        Number of top features to show
+    title : str, optional
+        Plot title
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Get top N features
+    plot_df = importance_df.head(top_n).sort_values('importance', ascending=True)
+    
+    # Create horizontal bar chart
+    ax.barh(plot_df['feature'], plot_df['importance'], color='steelblue')
+    
+    ax.set_xlabel('Importance', fontweight='bold')
+    ax.set_ylabel('Feature', fontweight='bold')
+    ax.set_title(title, fontweight='bold', pad=20)
+    ax.grid(True, alpha=0.3, axis='x')
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
+    
+    plt.show()
+
+
+def plot_cn0_over_time(
+    df: pd.DataFrame,
+    time_column: str = 'segment_start_time',
+    cn0_column: str = 'cn0_estimate',
+    label_column: str = 'label',
+    title: str = "C/N0 Over Time",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (14, 6)
+) -> None:
+    """
+    Plot C/N0 evolution over time with spoofing indication.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with time, C/N0, and label columns
+    time_column : str, optional
+        Time column name
+    cn0_column : str, optional
+        C/N0 column name
+    label_column : str, optional
+        Label column name
+    title : str, optional
+        Plot title
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Plot C/N0
+    authentic = df[df[label_column] == 0]
+    spoofed = df[df[label_column] == 1]
+    
+    if len(authentic) > 0:
+        ax.plot(authentic[time_column], authentic[cn0_column],
+                'go', markersize=4, alpha=0.6, label='Authentic')
+    
+    if len(spoofed) > 0:
+        ax.plot(spoofed[time_column], spoofed[cn0_column],
+                'ro', markersize=4, alpha=0.6, label='Spoofed')
+    
+    ax.set_xlabel('Time (s)', fontweight='bold')
+    ax.set_ylabel('C/N0 (dB-Hz)', fontweight='bold')
+    ax.set_title(title, fontweight='bold', pad=20)
     ax.legend()
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
     
-    return fig, ax
+    plt.show()
 
 
-def plot_signal_spectrum(signal: np.ndarray, fs: float,
-                        title: str = "Signal Spectrum",
-                        save_path: Optional[str] = None,
-                        figsize: tuple = (12, 6)):
+def plot_signal_spectrum(
+    signal: np.ndarray,
+    fs: float,
+    title: str = "Signal Spectrum",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 5)
+) -> None:
     """
-    Plot signal spectrum (FFT).
+    Plot signal spectrum.
     
-    Args:
-        signal: Complex signal
-        fs: Sampling frequency (Hz)
-        title: Plot title
-        save_path: Path to save figure
-        figsize: Figure size
+    Parameters
+    ----------
+    signal : np.ndarray
+        Complex signal
+    fs : float
+        Sampling frequency in Hz
+    title : str, optional
+        Plot title
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
     """
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
     
     # Compute FFT
-    fft_vals = np.fft.fft(signal)
-    freqs = np.fft.fftfreq(len(signal), 1/fs)
+    spectrum = np.fft.fftshift(np.fft.fft(signal))
+    freqs = np.fft.fftshift(np.fft.fftfreq(len(signal), 1/fs))
+    magnitude_db = 20 * np.log10(np.abs(spectrum) + 1e-12)
     
-    # Plot positive frequencies only
-    mask = freqs > 0
-    ax.semilogy(freqs[mask]/1e6, np.abs(fft_vals[mask]), 'b-', linewidth=0.8)
+    # Plot
+    ax.plot(freqs / 1e6, magnitude_db, 'b-', linewidth=0.8)
     
-    ax.set_xlabel('Frequency (MHz)', fontsize=12)
-    ax.set_ylabel('Magnitude', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel('Frequency (MHz)', fontweight='bold')
+    ax.set_ylabel('Magnitude (dB)', fontweight='bold')
+    ax.set_title(title, fontweight='bold', pad=20)
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to: {save_path}")
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
     
-    return fig, ax
+    plt.show()
+
+
+def plot_model_comparison(
+    comparison_df: pd.DataFrame,
+    metric: str = 'F1-Score',
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (10, 6)
+) -> None:
+    """
+    Plot bar chart comparing multiple models.
+    
+    Parameters
+    ----------
+    comparison_df : pd.DataFrame
+        DataFrame with model comparison results
+    metric : str, optional
+        Metric to plot (column name)
+    save_path : str, optional
+        Path to save figure
+    figsize : tuple, optional
+        Figure size
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Sort by metric
+    plot_df = comparison_df.sort_values(metric, ascending=False)
+    
+    # Create bar chart
+    bars = ax.bar(range(len(plot_df)), plot_df[metric], color='steelblue')
+    
+    # Color best model differently
+    bars[0].set_color('darkgreen')
+    
+    ax.set_xticks(range(len(plot_df)))
+    ax.set_xticklabels(plot_df['Model'], rotation=45, ha='right')
+    ax.set_ylabel(metric, fontweight='bold')
+    ax.set_title(f'Model Comparison - {metric}', fontweight='bold', pad=20)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim([0, 1.0])
+    
+    # Add value labels on bars
+    for i, bar in enumerate(bars):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.3f}',
+                ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Figure saved: {save_path}")
+    
+    plt.show()
+
+
+def create_results_directory(base_path: str = 'results') -> Path:
+    """
+    Create directory for saving results and figures.
+    
+    Parameters
+    ----------
+    base_path : str, optional
+        Base path for results directory
+        
+    Returns
+    -------
+    Path
+        Path object for results directory
+    """
+    results_dir = Path(base_path)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create subdirectories
+    (results_dir / 'figures').mkdir(exist_ok=True)
+    (results_dir / 'models').mkdir(exist_ok=True)
+    (results_dir / 'reports').mkdir(exist_ok=True)
+    
+    return results_dir

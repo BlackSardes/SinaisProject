@@ -1,519 +1,610 @@
 """
-Signal preprocessing functions for GPS spoofing detection.
-Includes functions from the original pre_process.py and additional utilities.
+Signal Processing Module for GPS Signals
+
+This module provides essential signal processing functions for GPS signal analysis:
+- Normalization
+- Filtering (bandpass, notch, DC removal)
+- Resampling
+- Segmentation
+- C/N0 estimation
+- Interference mitigation
 """
-import os
+
 import numpy as np
-from scipy.signal import butter, filtfilt, medfilt, savgol_filter, resample as scipy_resample
-from scipy.io import loadmat
-import pandas as pd
-from typing import Optional, Union, Tuple, List
-
-
-def read_iq_data(file_path: str, start_offset_samples: int, count_samples: int) -> Optional[np.ndarray]:
-    """
-    Read IQ data from binary files (TEXBAT format: int16 interleaved I/Q).
-    
-    Args:
-        file_path: Path to binary file (.bin or .dat)
-        start_offset_samples: Starting position in complex samples
-        count_samples: Number of complex samples to read
-    
-    Returns:
-        Complex numpy array (float32) with I+jQ data, or None if error
-    """
-    bytes_per_iq_pair = 4  # 2 bytes I + 2 bytes Q
-    start_offset_bytes = start_offset_samples * bytes_per_iq_pair
-    count_int16 = 2 * count_samples
-    
-    try:
-        with open(file_path, "rb") as f:
-            f.seek(start_offset_bytes)
-            raw = np.fromfile(f, dtype=np.int16, count=count_int16)
-        
-        if raw.size < count_int16:
-            return None
-        
-        I = raw[0::2].astype(np.float32)
-        Q = raw[1::2].astype(np.float32)
-        signal = I + 1j * Q
-        return signal
-    
-    except Exception as e:
-        print(f"Warning: Error reading segment from {os.path.basename(file_path)}: {e}")
-        return None
-
-
-def load_signal(path: str, file_format: Optional[str] = None) -> Tuple[np.ndarray, dict]:
-    """
-    Generic signal loader supporting multiple formats.
-    
-    Args:
-        path: Path to signal file
-        file_format: Force specific format ('bin', 'mat', 'csv'). Auto-detected if None.
-    
-    Returns:
-        Tuple of (signal array, metadata dict)
-    
-    Notes:
-        - For .bin/.dat: assumes TEXBAT format (int16 interleaved I/Q)
-        - For .mat: loads first complex array found or combines I/Q fields
-        - For .csv: expects columns 'I' and 'Q' or 'real' and 'imag'
-        - FGI-SpoofRepo: provide instructions in metadata for manual download
-    """
-    if file_format is None:
-        ext = os.path.splitext(path)[1].lower()
-        if ext in ['.bin', '.dat']:
-            file_format = 'bin'
-        elif ext == '.mat':
-            file_format = 'mat'
-        elif ext == '.csv':
-            file_format = 'csv'
-        else:
-            raise ValueError(f"Unknown file extension: {ext}. Specify file_format explicitly.")
-    
-    metadata = {'path': path, 'format': file_format}
-    
-    if file_format == 'bin':
-        # Read entire file as IQ data
-        signal = read_iq_data(path, 0, os.path.getsize(path) // 4)
-        if signal is None:
-            raise IOError(f"Failed to read binary file: {path}")
-        metadata['samples'] = len(signal)
-        return signal, metadata
-    
-    elif file_format == 'mat':
-        # Load MATLAB file
-        try:
-            mat_data = loadmat(path)
-            # Try to find signal data (common field names)
-            for key in ['signal', 'data', 'IQ', 'samples']:
-                if key in mat_data:
-                    signal = mat_data[key].flatten()
-                    if not np.iscomplexobj(signal):
-                        # Try to construct complex from I and Q
-                        if len(signal) % 2 == 0:
-                            signal = signal[::2] + 1j * signal[1::2]
-                    metadata['samples'] = len(signal)
-                    metadata['mat_key'] = key
-                    return signal, metadata
-            
-            # If not found, look for I and Q separately
-            if 'I' in mat_data and 'Q' in mat_data:
-                signal = mat_data['I'].flatten() + 1j * mat_data['Q'].flatten()
-                metadata['samples'] = len(signal)
-                return signal, metadata
-            
-            raise ValueError("Could not find signal data in .mat file. Expected fields: 'signal', 'data', 'IQ', or 'I'/'Q'")
-        except Exception as e:
-            raise IOError(f"Error loading .mat file: {e}")
-    
-    elif file_format == 'csv':
-        # Load CSV file
-        df = pd.read_csv(path)
-        if 'I' in df.columns and 'Q' in df.columns:
-            signal = df['I'].values + 1j * df['Q'].values
-        elif 'real' in df.columns and 'imag' in df.columns:
-            signal = df['real'].values + 1j * df['imag'].values
-        else:
-            raise ValueError("CSV must contain columns ('I', 'Q') or ('real', 'imag')")
-        metadata['samples'] = len(signal)
-        return signal, metadata
-    
-    else:
-        raise ValueError(f"Unsupported file format: {file_format}")
+from scipy.signal import butter, filtfilt, iirfilter, lfilter, resample, savgol_filter, medfilt
+from scipy.fft import fft, ifft, fftfreq
+from typing import Optional, Tuple
 
 
 def normalize_signal(signal: np.ndarray, method: str = 'power') -> np.ndarray:
     """
     Normalize signal using various methods.
     
-    Args:
-        signal: Input signal (real or complex)
-        method: Normalization method ('power', 'max', 'std')
-    
-    Returns:
+    Parameters
+    ----------
+    signal : np.ndarray
+        Complex or real signal
+    method : str, optional
+        Normalization method: 'power', 'amplitude', 'zscore' (default: 'power')
+        
+    Returns
+    -------
+    np.ndarray
         Normalized signal
+        
+    Notes
+    -----
+    - 'power': Normalize to unit power (E[|x|^2] = 1)
+    - 'amplitude': Normalize to unit amplitude (max|x| = 1)
+    - 'zscore': Zero mean and unit variance
     """
     if method == 'power':
-        return normalize_by_power(signal)
-    elif method == 'max':
-        max_val = np.max(np.abs(signal))
-        return signal / max_val if max_val > 1e-12 else signal
-    elif method == 'std':
-        std_val = np.std(signal)
-        return signal / std_val if std_val > 1e-12 else signal
+        power = np.mean(np.abs(signal) ** 2)
+        # Add epsilon to prevent division by very small numbers
+        return signal / np.sqrt(power + 1e-12)
+    
+    elif method == 'amplitude':
+        max_amp = np.max(np.abs(signal))
+        if max_amp > 1e-12:
+            return signal / max_amp
+        return signal
+    
+    elif method == 'zscore':
+        mean = np.mean(signal)
+        std = np.std(signal)
+        if std > 1e-12:
+            return (signal - mean) / std
+        return signal - mean
+    
     else:
         raise ValueError(f"Unknown normalization method: {method}")
 
 
-def normalize_by_power(signal: np.ndarray) -> np.ndarray:
+def bandpass_filter(
+    signal: np.ndarray,
+    fs: float,
+    low: float,
+    high: float,
+    order: int = 4
+) -> np.ndarray:
     """
-    Normalize signal so that mean power E[|x|^2] ≈ 1 (0 dB).
+    Apply Butterworth bandpass filter to signal.
     
-    Args:
-        signal: Complex signal array
-    
-    Returns:
-        Power-normalized signal
-    """
-    power = np.mean(np.abs(signal)**2)
-    if power > 1e-12:
-        return signal / np.sqrt(power)
-    return signal
-
-
-def bandpass_filter(signal: np.ndarray, fs: float, low: float, high: float, order: int = 5) -> np.ndarray:
-    """
-    Apply bandpass filter to signal.
-    
-    Args:
-        signal: Input signal (complex)
-        fs: Sampling frequency (Hz)
-        low: Lower cutoff frequency (Hz)
-        high: Upper cutoff frequency (Hz)
-        order: Filter order
-    
-    Returns:
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal (can be complex)
+    fs : float
+        Sampling frequency in Hz
+    low : float
+        Lower cutoff frequency in Hz
+    high : float
+        Upper cutoff frequency in Hz
+    order : int, optional
+        Filter order (default: 4)
+        
+    Returns
+    -------
+    np.ndarray
         Filtered signal
+        
+    Notes
+    -----
+    For GPS L1 C/A signals, typical bandwidth is around 2 MHz.
+    The Butterworth filter provides a maximally flat passband response.
+    
+    Uses filtfilt for zero-phase filtering (no group delay distortion).
     """
     nyquist = fs / 2
     low_norm = low / nyquist
     high_norm = high / nyquist
     
-    if low_norm <= 0 or high_norm >= 1:
-        raise ValueError("Cutoff frequencies must be in range (0, fs/2)")
-    
+    # Design filter
     b, a = butter(order, [low_norm, high_norm], btype='band')
     
+    # Apply filter (handle complex signals)
     if np.iscomplexobj(signal):
-        # Filter I and Q separately
-        I_filtered = filtfilt(b, a, np.real(signal))
-        Q_filtered = filtfilt(b, a, np.imag(signal))
-        return I_filtered + 1j * Q_filtered
+        filtered_real = filtfilt(b, a, np.real(signal))
+        filtered_imag = filtfilt(b, a, np.imag(signal))
+        return filtered_real + 1j * filtered_imag
     else:
         return filtfilt(b, a, signal)
+
+
+def notch_filter(
+    signal: np.ndarray,
+    fs: float,
+    f0: float,
+    Q: float = 30.0
+) -> np.ndarray:
+    """
+    Apply notch filter to suppress narrowband interference.
+    
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal (can be complex)
+    fs : float
+        Sampling frequency in Hz
+    f0 : float
+        Notch frequency (center frequency to suppress) in Hz
+    Q : float, optional
+        Quality factor (default: 30.0) - higher Q = narrower notch
+        
+    Returns
+    -------
+    np.ndarray
+        Filtered signal
+        
+    Notes
+    -----
+    Notch filters are used to suppress Radio Frequency Interference (RFI)
+    from narrowband sources like communication systems or other RF emitters.
+    
+    The Q factor determines the bandwidth: BW ≈ f0/Q
+    """
+    # Design notch filter
+    b, a = iirfilter(
+        2,
+        [f0 - f0/(2*Q), f0 + f0/(2*Q)],
+        rs=60,
+        btype='bandstop',
+        fs=fs,
+        output='ba'
+    )
+    
+    # Apply filter (handle complex signals)
+    if np.iscomplexobj(signal):
+        filtered_real = lfilter(b, a, np.real(signal))
+        filtered_imag = lfilter(b, a, np.imag(signal))
+        return filtered_real + 1j * filtered_imag
+    else:
+        return lfilter(b, a, signal)
 
 
 def remove_dc(signal: np.ndarray) -> np.ndarray:
     """
     Remove DC offset from signal.
     
-    Args:
-        signal: Input signal
-    
-    Returns:
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal (can be complex)
+        
+    Returns
+    -------
+    np.ndarray
         Signal with DC removed
+        
+    Notes
+    -----
+    DC offset can result from hardware imperfections in the RF front-end.
+    Removing DC is important for proper correlation and power estimation.
     """
     if np.iscomplexobj(signal):
-        I = np.real(signal) - np.mean(np.real(signal))
-        Q = np.imag(signal) - np.mean(np.imag(signal))
-        return I + 1j * Q
+        return signal - np.mean(signal)
     else:
         return signal - np.mean(signal)
 
 
-def resample_signal(signal: np.ndarray, fs_old: float, fs_new: float) -> np.ndarray:
+def resample_signal(
+    signal: np.ndarray,
+    fs_old: float,
+    fs_new: float
+) -> np.ndarray:
     """
     Resample signal to new sampling rate.
     
-    Args:
-        signal: Input signal
-        fs_old: Original sampling frequency (Hz)
-        fs_new: Target sampling frequency (Hz)
-    
-    Returns:
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal
+    fs_old : float
+        Original sampling frequency in Hz
+    fs_new : float
+        Target sampling frequency in Hz
+        
+    Returns
+    -------
+    np.ndarray
         Resampled signal
+        
+    Notes
+    -----
+    Uses Fourier method for resampling which is appropriate for
+    bandlimited signals. This maintains signal properties better
+    than simple interpolation.
     """
-    if fs_old == fs_new:
-        return signal
-    
     num_samples_new = int(len(signal) * fs_new / fs_old)
-    return scipy_resample(signal, num_samples_new)
+    return resample(signal, num_samples_new)
 
 
-def window_segment(signal: np.ndarray, fs: float, window_s: float, hop_s: float) -> List[np.ndarray]:
+def segment_signal(
+    signal: np.ndarray,
+    segment_length: int,
+    overlap: float = 0.0
+) -> list:
     """
-    Segment signal into overlapping windows.
+    Segment signal into windows of fixed length.
     
-    Args:
-        signal: Input signal
-        fs: Sampling frequency (Hz)
-        window_s: Window size in seconds
-        hop_s: Hop size in seconds
-    
-    Returns:
-        List of signal windows
-    """
-    window_samples = int(window_s * fs)
-    hop_samples = int(hop_s * fs)
-    
-    windows = []
-    start = 0
-    while start + window_samples <= len(signal):
-        windows.append(signal[start:start + window_samples])
-        start += hop_samples
-    
-    return windows
-
-
-def align_channels(signals: List[np.ndarray], method: str = 'cross_correlation') -> List[np.ndarray]:
-    """
-    Align multiple signal channels (e.g., from different antennas).
-    
-    Args:
-        signals: List of signal arrays
-        method: Alignment method ('cross_correlation')
-    
-    Returns:
-        List of aligned signals
-    """
-    if len(signals) < 2:
-        return signals
-    
-    if method == 'cross_correlation':
-        # Use first signal as reference
-        ref = signals[0]
-        aligned = [ref]
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal
+    segment_length : int
+        Length of each segment in samples
+    overlap : float, optional
+        Overlap fraction between segments (0.0 to 0.99, default: 0.0)
         
-        for sig in signals[1:]:
-            # Compute cross-correlation to find delay
-            corr = np.correlate(ref, sig, mode='full')
-            delay = len(sig) - 1 - np.argmax(np.abs(corr))
-            
-            # Align signal
-            if delay > 0:
-                sig_aligned = np.concatenate([np.zeros(delay, dtype=sig.dtype), sig[:-delay]])
-            elif delay < 0:
-                sig_aligned = np.concatenate([sig[-delay:], np.zeros(-delay, dtype=sig.dtype)])
-            else:
-                sig_aligned = sig
-            
-            aligned.append(sig_aligned)
+    Returns
+    -------
+    list of np.ndarray
+        List of signal segments
         
-        return aligned
-    else:
-        raise ValueError(f"Unknown alignment method: {method}")
+    Notes
+    -----
+    Segmentation is crucial for:
+    - Processing large datasets in chunks
+    - Time-varying analysis (detecting when spoofing starts)
+    - Managing memory constraints
+    
+    Overlap can help capture transitions between segments.
+    """
+    if overlap < 0 or overlap >= 1:
+        raise ValueError("Overlap must be in range [0, 1)")
+    
+    step = int(segment_length * (1 - overlap))
+    segments = []
+    
+    for start in range(0, len(signal) - segment_length + 1, step):
+        end = start + segment_length
+        segments.append(signal[start:end])
+    
+    return segments
 
 
-def remove_outliers(signal: np.ndarray, method: str = 'median', thresh: float = 3.0) -> np.ndarray:
+def remove_outliers(
+    signal: np.ndarray,
+    threshold: float = 4.0,
+    method: str = 'clip'
+) -> np.ndarray:
     """
-    Remove or suppress outliers in signal.
+    Remove or clip outliers from signal.
     
-    Args:
-        signal: Input signal
-        method: Outlier removal method ('median', 'std', 'iqr')
-        thresh: Threshold factor
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal (can be complex)
+    threshold : float, optional
+        Threshold in standard deviations (default: 4.0)
+    method : str, optional
+        Method: 'clip' or 'zero' (default: 'clip')
+        
+    Returns
+    -------
+    np.ndarray
+        Signal with outliers handled
+        
+    Notes
+    -----
+    Outliers can result from:
+    - Impulsive interference (lightning, radar)
+    - ADC saturation
+    - Data corruption
     
-    Returns:
-        Signal with outliers removed/suppressed
+    'clip': Limits outliers to threshold
+    'zero': Sets outliers to zero
     """
-    mag = np.abs(signal)
+    # Work with magnitude for complex signals
+    magnitude = np.abs(signal)
+    mean_mag = np.mean(magnitude)
+    std_mag = np.std(magnitude)
     
-    if method == 'median':
-        median = np.median(mag)
-        mad = np.median(np.abs(mag - median))
-        threshold = median + thresh * mad
-        mask = mag > threshold
-        result = signal.copy()
-        result[mask] = signal[mask] * (threshold / mag[mask])
-        return result
+    # Find outliers
+    outlier_mask = magnitude > (mean_mag + threshold * std_mag)
     
-    elif method == 'std':
-        mean = np.mean(mag)
-        std = np.std(mag)
-        threshold = mean + thresh * std
-        mask = mag > threshold
-        result = signal.copy()
-        result[mask] = signal[mask] * (threshold / mag[mask])
-        return result
+    if method == 'clip':
+        # Clip to threshold
+        max_allowed = mean_mag + threshold * std_mag
+        phase = np.angle(signal)
+        magnitude_clipped = np.where(outlier_mask, max_allowed, magnitude)
+        return magnitude_clipped * np.exp(1j * phase)
     
-    elif method == 'iqr':
-        q1, q3 = np.percentile(mag, [25, 75])
-        iqr = q3 - q1
-        threshold = q3 + thresh * iqr
-        mask = mag > threshold
-        result = signal.copy()
-        result[mask] = signal[mask] * (threshold / mag[mask])
-        return result
+    elif method == 'zero':
+        # Zero out outliers
+        signal_clean = signal.copy()
+        signal_clean[outlier_mask] = 0
+        return signal_clean
     
     else:
-        raise ValueError(f"Unknown outlier removal method: {method}")
+        raise ValueError(f"Unknown method: {method}")
 
 
-def smooth_signal(signal: np.ndarray, method: str = 'savgol', window_length: int = 11, polyorder: int = 3) -> np.ndarray:
+def apply_savgol_filter(
+    signal: np.ndarray,
+    window_length: int = 11,
+    polyorder: int = 2
+) -> np.ndarray:
     """
-    Smooth signal using various methods.
+    Apply Savitzky-Golay smoothing filter.
     
-    Args:
-        signal: Input signal
-        method: Smoothing method ('savgol', 'median')
-        window_length: Window length for smoothing (must be odd for savgol)
-        polyorder: Polynomial order for Savitzky-Golay filter
-    
-    Returns:
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal (can be complex)
+    window_length : int, optional
+        Length of filter window (must be odd, default: 11)
+    polyorder : int, optional
+        Order of polynomial fit (default: 2)
+        
+    Returns
+    -------
+    np.ndarray
         Smoothed signal
+        
+    Notes
+    -----
+    Savitzky-Golay filter smooths data while preserving shape better
+    than moving average. Good for removing high-frequency noise while
+    maintaining sharp features like correlation peaks.
+    """
+    if window_length % 2 == 0:
+        window_length += 1  # Must be odd
+    
+    if np.iscomplexobj(signal):
+        real_filtered = savgol_filter(np.real(signal), window_length, polyorder)
+        imag_filtered = savgol_filter(np.imag(signal), window_length, polyorder)
+        return real_filtered + 1j * imag_filtered
+    else:
+        return savgol_filter(signal, window_length, polyorder)
+
+
+def apply_median_filter(signal: np.ndarray, kernel_size: int = 5) -> np.ndarray:
+    """
+    Apply median filter for impulsive noise removal.
+    
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal (can be complex)
+    kernel_size : int, optional
+        Size of median filter kernel (default: 5)
+        
+    Returns
+    -------
+    np.ndarray
+        Filtered signal
+        
+    Notes
+    -----
+    Median filter is very effective at removing impulsive (salt-and-pepper)
+    noise while preserving edges. Non-linear filter.
     """
     if np.iscomplexobj(signal):
-        # Smooth I and Q separately
-        I_smooth = smooth_signal(np.real(signal), method, window_length, polyorder)
-        Q_smooth = smooth_signal(np.imag(signal), method, window_length, polyorder)
-        return I_smooth + 1j * Q_smooth
-    
-    if method == 'savgol':
-        if window_length % 2 == 0:
-            window_length += 1
-        return savgol_filter(signal, window_length, polyorder)
-    elif method == 'median':
-        if window_length % 2 == 0:
-            window_length += 1
-        return medfilt(signal, kernel_size=window_length)
+        real_filtered = medfilt(np.real(signal), kernel_size)
+        imag_filtered = medfilt(np.imag(signal), kernel_size)
+        return real_filtered + 1j * imag_filtered
     else:
-        raise ValueError(f"Unknown smoothing method: {method}")
+        return medfilt(signal, kernel_size)
 
 
-def estimate_cn0_from_correlation(corr_profile: np.ndarray, fs: float, 
-                                   integration_time: float = 0.001) -> float:
+def estimate_cn0_from_signal(
+    signal: np.ndarray,
+    fs: float,
+    correlation_peak: Optional[float] = None
+) -> float:
     """
-    Estimate C/N0 from correlation profile.
+    Estimate C/N0 (Carrier-to-Noise density ratio) from signal.
     
-    Args:
-        corr_profile: Correlation magnitude profile
-        fs: Sampling frequency (Hz)
-        integration_time: Integration time in seconds
-    
-    Returns:
+    Parameters
+    ----------
+    signal : np.ndarray
+        Preprocessed complex signal
+    fs : float
+        Sampling frequency in Hz
+    correlation_peak : float, optional
+        Peak value from correlation (if available)
+        
+    Returns
+    -------
+    float
         Estimated C/N0 in dB-Hz
-    
-    Notes:
-        This is a simplified estimation. Limitations:
-        - Assumes single coherent integration
-        - Does not account for squaring loss
-        - May be inaccurate for low C/N0 signals
-    """
-    peak_value = np.max(corr_profile)
-    peak_idx = np.argmax(corr_profile)
-    
-    # Estimate noise floor (exclude region around peak)
-    exclude_samples = int(0.002 * fs)  # 2ms exclusion
-    noise_profile = np.concatenate([
-        corr_profile[:max(0, peak_idx - exclude_samples)],
-        corr_profile[min(len(corr_profile), peak_idx + exclude_samples):]
-    ])
-    
-    if len(noise_profile) == 0:
-        return 0.0
-    
-    noise_power = np.mean(noise_profile**2)
-    signal_power = peak_value**2
-    
-    # C/N0 estimation
-    if noise_power > 0 and signal_power > noise_power:
-        # Simplified formula: C/N0 ≈ 10*log10(SNR / integration_time)
-        snr = (signal_power - noise_power) / noise_power
-        cn0 = 10 * np.log10(snr / integration_time)
-        return max(0.0, cn0)
-    
-    return 0.0
-
-
-def estimate_cn0_from_signal(signal: np.ndarray, fs: float, 
-                              prn_code: Optional[np.ndarray] = None) -> float:
-    """
-    Estimate C/N0 directly from signal.
-    
-    Args:
-        signal: Complex IQ signal
-        fs: Sampling frequency (Hz)
-        prn_code: Optional PRN code for correlation-based estimation
-    
-    Returns:
-        Estimated C/N0 in dB-Hz
-    
-    Notes:
-        If prn_code is provided, uses correlation method.
-        Otherwise, uses power-based estimation which is less accurate.
-    """
-    if prn_code is not None:
-        # Correlation-based estimation (generate_ca_code is in this module)
         
-        # Ensure PRN code matches signal length
-        if len(prn_code) < len(signal):
-            prn_code = np.tile(prn_code, int(np.ceil(len(signal) / len(prn_code))))
-        prn_code = prn_code[:len(signal)]
-        
-        # Compute correlation
-        fft_signal = np.fft.fft(signal)
-        fft_code = np.fft.fft(prn_code)
-        corr = np.fft.ifft(fft_signal * np.conj(fft_code))
-        corr_mag = np.abs(corr)
-        
-        return estimate_cn0_from_correlation(corr_mag, fs)
+    Notes
+    -----
+    C/N0 is a key metric for GPS signal quality. Typical values:
+    - Clear sky: 45-50 dB-Hz
+    - Urban canyon: 30-40 dB-Hz
+    - Indoor: 20-30 dB-Hz
+    
+    This is a simplified estimator. More accurate methods use
+    the correlation peak and noise floor from the acquisition process.
+    """
+    # Total signal power
+    total_power = np.mean(np.abs(signal) ** 2)
+    
+    if correlation_peak is not None:
+        # Estimate carrier power from correlation peak
+        carrier_power = (correlation_peak ** 2) / len(signal)
     else:
-        # Power-based estimation (simplified)
-        total_power = np.mean(np.abs(signal)**2)
-        # Assume SNR ~ 10 (very rough approximation)
-        # This is a placeholder - proper C/N0 needs code correlation
-        estimated_snr = 10.0
-        cn0 = 10 * np.log10(estimated_snr * fs / 1000)  # Very rough estimate
-        return cn0
+        # Rough estimate: assume signal is mostly noise
+        carrier_power = total_power * 0.1  # Placeholder
+    
+    # Estimate noise power
+    noise_power = total_power - carrier_power
+    if noise_power <= 0:
+        noise_power = 1e-12
+    
+    # C/N0 = Carrier power / Noise power density
+    # Noise power density = noise_power / bandwidth
+    # For GPS, we use the sampling rate as a proxy for bandwidth
+    cn0_linear = carrier_power / (noise_power / fs)
+    cn0_db = 10 * np.log10(cn0_linear) if cn0_linear > 0 else -np.inf
+    
+    return float(cn0_db)
 
 
-def apply_frequency_correction(signal: np.ndarray, fs: float, freq_correction: float) -> np.ndarray:
+def estimate_cn0_from_correlation(
+    correlation: np.ndarray,
+    fs: float,
+    coherent_integration_time: float
+) -> float:
     """
-    Apply frequency correction to remove Doppler/IF offset.
+    Estimate C/N0 from correlation results (more accurate).
     
-    Args:
-        signal: Complex signal
-        fs: Sampling frequency (Hz)
-        freq_correction: Frequency to remove (Hz)
+    Parameters
+    ----------
+    correlation : np.ndarray
+        Correlation magnitude array
+    fs : float
+        Sampling frequency in Hz
+    coherent_integration_time : float
+        Integration time in seconds
+        
+    Returns
+    -------
+    float
+        Estimated C/N0 in dB-Hz
+        
+    Notes
+    -----
+    This method uses the peak-to-noise ratio in the correlation
+    function, which is more accurate than signal power estimation.
     
-    Returns:
+    The Narrow-Band Wide-Band Power Ratio (NWWPR) method.
+    """
+    # Find peak
+    peak_value = np.max(correlation)
+    peak_index = np.argmax(correlation)
+    
+    # Estimate noise floor (exclude peak region)
+    window = int(0.02 * len(correlation))  # 2% window around peak
+    noise_mask = np.ones(len(correlation), dtype=bool)
+    noise_mask[max(0, peak_index-window):min(len(correlation), peak_index+window)] = False
+    
+    noise_floor = np.mean(correlation[noise_mask])
+    noise_std = np.std(correlation[noise_mask])
+    
+    # Signal-to-noise ratio
+    snr = (peak_value - noise_floor) / noise_std if noise_std > 0 else 0
+    
+    # Convert to C/N0
+    # C/N0 ≈ SNR / T_coh (where T_coh is coherent integration time)
+    cn0_linear = snr / coherent_integration_time
+    cn0_db = 10 * np.log10(cn0_linear) if cn0_linear > 0 else -np.inf
+    
+    return float(cn0_db)
+
+
+def apply_frequency_correction(
+    signal: np.ndarray,
+    fs: float,
+    freq_correction: float
+) -> np.ndarray:
+    """
+    Apply frequency correction to signal (Doppler/IF correction).
+    
+    Parameters
+    ----------
+    signal : np.ndarray
+        Complex input signal
+    fs : float
+        Sampling frequency in Hz
+    freq_correction : float
+        Frequency to remove (IF + Doppler) in Hz
+        
+    Returns
+    -------
+    np.ndarray
         Frequency-corrected signal
-    """
-    if freq_correction == 0:
-        return signal
+        
+    Notes
+    -----
+    This implements the frequency shifting property of Fourier Transform:
+    Multiplying by exp(-j*2*pi*f*t) shifts the spectrum by -f Hz.
     
+    Essential for:
+    - Removing intermediate frequency (IF)
+    - Compensating for Doppler shift
+    - Bringing signal to baseband
+    """
     t = np.arange(len(signal)) / fs
     mixer = np.exp(-1j * 2 * np.pi * freq_correction * t)
     return signal * mixer
 
 
-def generate_ca_code(prn_number: int) -> np.ndarray:
+def apply_pulse_blanking(
+    signal: np.ndarray,
+    threshold_factor: float = 4.0
+) -> np.ndarray:
     """
-    Generate GPS C/A code for specified PRN.
+    Mitigate impulsive interference using pulse blanking.
     
-    Args:
-        prn_number: PRN number (1-32)
-    
-    Returns:
-        C/A code array of 1023 chips with values +1/-1
+    Parameters
+    ----------
+    signal : np.ndarray
+        Complex input signal
+    threshold_factor : float, optional
+        Threshold in standard deviations (default: 4.0)
+        
+    Returns
+    -------
+    np.ndarray
+        Signal with pulses blanked
+        
+    Notes
+    -----
+    Pulse blanking is a time-domain interference mitigation technique
+    that zeros out samples exceeding a threshold. Effective against
+    radar pulses and other impulsive RFI.
     """
-    g2_shifts = {
-        1: (2,6), 2: (3,7), 3: (4,8), 4: (5,9), 5: (1,9),
-        6: (2,10), 7: (1,8), 8: (2,9), 9: (3,10), 10: (2,3),
-        11: (3,4), 12: (5,6), 13: (6,7), 14: (7,8), 15: (8,9),
-        16: (9,10), 17: (1,4), 18: (2,5), 19: (3,6), 20: (4,7),
-        21: (5,8), 22: (6,9), 23: (1,3), 24: (4,6), 25: (5,7),
-        26: (6,8), 27: (7,9), 28: (8,10), 29: (1,6), 30: (2,7),
-        31: (3,8), 32: (4,9)
-    }
+    magnitude = np.abs(signal)
+    threshold = threshold_factor * np.std(magnitude)
     
-    if prn_number not in g2_shifts:
-        raise ValueError(f"PRN number must be 1-32, got {prn_number}")
+    # Blank (zero) samples above threshold
+    signal_blanked = signal.copy()
+    signal_blanked[magnitude > threshold] = 0
     
-    s1, s2 = g2_shifts[prn_number]
-    g1 = np.ones(10, dtype=int)
-    g2 = np.ones(10, dtype=int)
-    ca = np.zeros(1023, dtype=int)
+    return signal_blanked
+
+
+def apply_frequency_domain_interference_mitigation(
+    signal: np.ndarray,
+    threshold_factor: float = 3.5
+) -> np.ndarray:
+    """
+    Mitigate narrowband interference in frequency domain (FDPB).
     
-    for i in range(1023):
-        ca[i] = (g1[-1] ^ (g2[-s1] ^ g2[-s2]))
-        new_g1 = g1[2] ^ g1[9]
-        new_g2 = g2[1] ^ g2[2] ^ g2[5] ^ g2[7] ^ g2[8] ^ g2[9]
-        g1 = np.roll(g1, 1)
-        g1[0] = new_g1
-        g2 = np.roll(g2, 1)
-        g2[0] = new_g2
+    Parameters
+    ----------
+    signal : np.ndarray
+        Complex input signal
+    threshold_factor : float, optional
+        Threshold factor for MAD-based detection (default: 3.5)
+        
+    Returns
+    -------
+    np.ndarray
+        Signal with interference mitigated
+        
+    Notes
+    -----
+    Frequency Domain Pulse Blanking (FDPB) suppresses narrowband RFI
+    by zeroing out spectral bins that exceed a robust threshold.
     
-    return 1 - 2 * ca
+    Uses Median Absolute Deviation (MAD) for robust threshold estimation.
+    """
+    # Transform to frequency domain
+    signal_fft = fft(signal)
+    magnitude_spectrum = np.abs(signal_fft)
+    
+    # Robust threshold using MAD
+    median_mag = np.median(magnitude_spectrum)
+    mad = np.median(np.abs(magnitude_spectrum - median_mag))
+    threshold = median_mag + threshold_factor * 1.4826 * mad  # 1.4826 makes MAD ~ std
+    
+    # Zero out bins above threshold
+    signal_fft[magnitude_spectrum > threshold] = 0
+    
+    # Transform back to time domain
+    return ifft(signal_fft)

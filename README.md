@@ -1,440 +1,331 @@
-# SinaisProject - Detecção de Spoofing em Sinais GPS
 
-Pipeline robusto para detecção de ataques de spoofing em sinais GNSS (GPS) utilizando análise de correlação, métricas de qualidade de sinal (SQMs), e aprendizado de máquina.
+# SinaisProject - GPS Spoofing Detection
 
-**Disciplina**: ES413 - Sinais e Sistemas (Cin/UFPE)
+A robust machine learning pipeline for detecting GPS spoofing attacks using signal processing and classification techniques. This project was developed for the Signals and Systems (ES413) course.
 
----
+## 📋 Table of Contents
 
-## 📋 Sumário
+- [Overview](#overview)
+- [Features](#features)
+- [Installation](#installation)
+- [Project Structure](#project-structure)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
-- [Características](#-características)
-- [Instalação](#-instalação)
-- [Uso Rápido](#-uso-rápido)
-- [Estrutura do Projeto](#-estrutura-do-projeto)
-- [Datasets](#-datasets)
-- [Notebooks](#-notebooks)
-- [Testes](#-testes)
-- [Documentação Técnica](#-documentação-técnica)
-- [Contribuindo](#-contribuindo)
+## 🎯 Overview
 
----
+GPS spoofing is a security threat where false GPS signals are transmitted to deceive receivers. This project implements a complete pipeline for detecting such attacks by analyzing:
 
-## ✨ Características
+- **Correlation peak distortions**: Spoofing creates multiple peaks or asymmetric patterns
+- **Power anomalies**: Spoofing signals often have higher power (C/N0) than authentic signals
+- **Statistical features**: Distribution changes in signal properties
 
-- **Pré-processamento Completo**: Normalização, filtragem, correção Doppler, remoção de outliers
-- **Extração de Features Avançada**: 
-  - Métricas SQM (Signal Quality Monitoring): Peak-to-Secondary, FWHM, Asymmetry
-  - Métricas de potência: C/N0, SNR, Noise Floor
-  - Features estatísticas: Skewness, Kurtosis
-- **Modelos de ML**:
-  - Random Forest (priorizado) com balanceamento automático
-  - SVM e MLP Neural Network como alternativas
-  - Suporte para SMOTE (balanceamento sintético)
-- **Gerador de Dados Sintéticos**: Permite execução offline sem datasets grandes
-- **Suporte para Datasets Reais**: FGI-SpoofRepo e TEXBAT
-- **Visualizações Avançadas**: Perfis de correlação, ROC curves, distribuições de features
-- **Pipeline End-to-End**: Script automatizado para execução completa
+The pipeline uses machine learning models (Random Forest, SVM, Neural Networks) trained on features extracted from GPS signal correlation functions.
 
----
+## ✨ Features
 
-## 🚀 Instalação
+### Signal Processing
+- Multi-format signal loading (binary, MATLAB, CSV, synthetic)
+- GPS C/A code generation for all PRN satellites (1-32)
+- Comprehensive preprocessing pipeline:
+  - DC offset removal
+  - Frequency correction (Doppler/IF)
+  - Interference mitigation (pulse blanking, frequency domain)
+  - Bandpass and notch filtering
+  - Signal normalization
 
-### Pré-requisitos
+### Feature Extraction
+- **Correlation-based features**:
+  - Peak-to-secondary ratio
+  - Full Width at Half Maximum (FWHM)
+  - Peak asymmetry
+  - Skewness and kurtosis
+  - Energy distribution
+  
+- **Power metrics**:
+  - C/N0 estimation
+  - SNR calculation
+  - Noise floor analysis
+  
+- **Statistical features**:
+  - Distribution moments
+  - Spectral characteristics
+  - Temporal patterns
 
-- Python 3.9+
-- pip ou conda
+### Machine Learning
+- Multiple model support (Random Forest, SVM, MLP)
+- Class imbalance handling (SMOTE, class weights)
+- Stratified cross-validation
+- Comprehensive evaluation metrics
+- Model persistence (save/load)
 
-### Instalação via pip
+### Visualization
+- Correlation profile plots
+- Feature distribution analysis
+- Confusion matrices
+- ROC curves
+- Feature importance rankings
+- C/N0 temporal evolution
+
+## 🛠️ Installation
+
+### Prerequisites
+- Python 3.9 or higher
+- pip or conda package manager
+
+### Using pip
 
 ```bash
-# Clone o repositório
+# Clone the repository
 git clone https://github.com/BlackSardes/SinaisProject.git
 cd SinaisProject
 
-# Instale as dependências
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Instalação via conda
+### Using conda
 
 ```bash
-# Clone o repositório
+# Clone the repository
 git clone https://github.com/BlackSardes/SinaisProject.git
 cd SinaisProject
 
-# Crie ambiente conda
+# Create conda environment
 conda env create -f environment.yml
-conda activate sinais-gps-spoofing
+conda activate sinaisproject
 ```
 
-### Dependências Opcionais
+## 📁 Project Structure
 
-Para usar TensorFlow/Keras ou Librosa (análise avançada):
+```
+SinaisProject/
+├── data/                          # Data directory (gitignored)
+│   ├── raw/                       # Raw signal files
+│   └── processed/                 # Processed features
+├── notebooks/                     # Jupyter notebooks
+│   ├── 01_exploratory_analysis.ipynb
+│   ├── 02_feature_extraction_demo.ipynb
+│   └── 03_model_training_evaluation.ipynb
+├── src/                           # Source code
+│   ├── preprocessing/             # Signal preprocessing
+│   │   ├── signal_io.py          # I/O operations
+│   │   ├── signal_processing.py  # Processing functions
+│   │   ├── prn_codes.py          # PRN code generation
+│   │   └── pipeline.py           # Complete pipeline
+│   ├── features/                  # Feature extraction
+│   │   ├── correlation.py        # Correlation features
+│   │   ├── statistical.py        # Statistical features
+│   │   └── pipeline.py           # Feature pipeline
+│   ├── models/                    # Machine learning models
+│   │   ├── training.py           # Training functions
+│   │   └── evaluation.py         # Evaluation metrics
+│   └── utils/                     # Utilities
+│       └── plots.py              # Visualization functions
+├── tests/                         # Unit tests
+├── scripts/                       # Executable scripts
+│   └── run_pipeline.py           # End-to-end pipeline
+├── docs/                          # Documentation
+│   └── DECISIONS.md              # Technical decisions
+├── requirements.txt               # Python dependencies
+├── environment.yml                # Conda environment
+└── README.md                      # This file
+```
+
+## 🚀 Quick Start
+
+### 1. Synthetic Signal Example
+
+```python
+from src.preprocessing.signal_io import generate_synthetic_signal
+from src.preprocessing.pipeline import preprocess_signal
+from src.features.pipeline import extract_features_from_segment
+
+# Generate synthetic GPS signal
+signal = generate_synthetic_signal(
+    num_samples=50000,
+    fs=5e6,
+    snr_db=10.0,
+    prn=1,
+    add_spoofing=True
+)
+
+# Preprocess
+signal_processed = preprocess_signal(signal, fs=5e6)
+
+# Extract features
+features = extract_features_from_segment(
+    signal_processed,
+    fs=5e6,
+    prn=1
+)
+
+print(f"Extracted {len(features)} features")
+```
+
+### 2. Process Real Data File
+
+```python
+from src.features.pipeline import extract_features_from_file
+
+# Define labeling function (TEXBAT dataset example)
+def label_func(time_s):
+    return 1 if time_s >= 17.0 else 0  # Spoofing starts at 17s
+
+# Extract features from entire file
+features_df = extract_features_from_file(
+    file_path='data/raw/signal.bin',
+    fs=5e6,
+    prn=1,
+    segment_duration=0.5,
+    label_func=label_func,
+    verbose=True
+)
+
+print(features_df.head())
+```
+
+### 3. Train and Evaluate Model
+
+```python
+from src.models.training import train_model, create_train_test_split
+from src.models.evaluation import evaluate_model
+from src.utils.plots import plot_confusion_matrix, plot_roc_curve
+
+# Prepare data
+X = features_df.drop(columns=['label', 'segment_start_time']).values
+y = features_df['label'].values
+
+# Split data
+X_train, X_test, y_train, y_test = create_train_test_split(X, y)
+
+# Train model
+model, cv_results = train_model(
+    X_train, y_train,
+    model_name='random_forest',
+    balance_method='class_weight'
+)
+
+# Evaluate
+results = evaluate_model(model, X_test, y_test)
+
+# Visualize
+plot_confusion_matrix(results['confusion_matrix'])
+```
+
+## 📖 Usage
+
+### Complete Pipeline Script
+
+Run the end-to-end pipeline:
+
 ```bash
-pip install tensorflow keras librosa
+python scripts/run_pipeline.py --data-dir data/raw --output-dir results
 ```
 
-Ou descomente as linhas correspondentes em `requirements.txt` ou `environment.yml`.
+### Jupyter Notebooks
 
----
-
-## 🎯 Uso Rápido
-
-### 1. Executar Pipeline Completo com Dados Sintéticos
-
-```bash
-python scripts/script_run_pipeline.py --mode synthetic --num-samples 200
-```
-
-**Saída**: Modelo treinado, métricas e visualizações em `data/processed/`
-
-### 2. Executar com Dataset Real (TEXBAT)
-
-```bash
-python scripts/script_run_pipeline.py \
-  --mode texbat \
-  --data-dir data/raw/texbat \
-  --spoof-time 17.0 \
-  --num-samples 500
-```
-
-### 3. Usar nos Notebooks
+Explore the interactive notebooks:
 
 ```bash
 jupyter notebook notebooks/
 ```
 
-Abra:
-- `EDA.ipynb`: Análise exploratória de dados
-- `feature_demo.ipynb`: Demonstração de extração de features
-- `training_eval.ipynb`: Treinamento e avaliação de modelos
+1. **01_exploratory_analysis.ipynb**: Dataset exploration and visualization
+2. **02_feature_extraction_demo.ipynb**: Feature extraction walkthrough
+3. **03_model_training_evaluation.ipynb**: Model training and comparison
 
-### 4. Usar como Biblioteca Python
+### Adding New Datasets
 
-```python
-from src.utils.synthetic_data import generate_synthetic_dataset
-from src.preprocessing.signal_processing import generate_ca_code
-from src.features.pipeline import build_feature_vector
-from src.models.train import train_model
+1. Place signal files in `data/raw/`
+2. Supported formats:
+   - Binary I/Q files (`.bin`, `.dat`): TEXBAT/FGI format
+   - MATLAB files (`.mat`): Must contain 'signal' or 'I'/'Q' variables
+   - CSV files (`.csv`): Two columns (I, Q)
 
-# Gerar dados
-signals, labels, metadata = generate_synthetic_dataset(
-    num_authentic=100, num_spoofed=100, fs=5e6
-)
-
-# Extrair features
-prn_code = generate_ca_code(prn=1)
-features = build_feature_vector(signals[0], prn_code, fs=5e6)
-
-# Treinar modelo
-model, metrics = train_model(X_train, y_train, model_name='random_forest')
-```
-
----
-
-## 📁 Estrutura do Projeto
-
-```
-SinaisProject/
-├── data/
-│   ├── raw/              # Dados brutos (FGI, TEXBAT) - não versionados
-│   └── processed/        # Features, modelos treinados
-├── notebooks/
-│   ├── EDA.ipynb         # Análise exploratória
-│   ├── feature_demo.ipynb # Demonstração de features
-│   └── training_eval.ipynb # Treinamento de modelos
-├── src/
-│   ├── preprocessing/    # Pré-processamento de sinais
-│   │   └── signal_processing.py
-│   ├── features/         # Extração de features
-│   │   ├── correlation.py
-│   │   ├── temporal.py
-│   │   └── pipeline.py
-│   ├── models/           # Treinamento e avaliação
-│   │   ├── train.py
-│   │   └── persistence.py
-│   └── utils/            # Utilitários
-│       ├── plots.py
-│       ├── synthetic_data.py
-│       └── data_loader.py
-├── scripts/
-│   └── script_run_pipeline.py  # Script de execução completa
-├── tests/                # Testes pytest
-│   ├── test_preprocessing.py
-│   ├── test_features.py
-│   └── test_pipeline.py
-├── docs/
-│   └── DECISIONS.md      # Decisões técnicas e fundamentos
-├── requirements.txt      # Dependências Python
-├── environment.yml       # Ambiente conda
-└── README.md             # Este arquivo
-```
-
----
-
-## 📊 Datasets
-
-### Dados Sintéticos (Padrão)
-
-O pipeline inclui um gerador de dados sintéticos GPS que permite execução sem downloads:
+3. Define labeling function based on your dataset:
 
 ```python
-from src.utils.synthetic_data import generate_synthetic_dataset
-
-signals, labels, metadata = generate_synthetic_dataset(
-    num_authentic=100,
-    num_spoofed=100,
-    fs=5e6,
-    duration=0.5
-)
+def custom_label_func(time_s):
+    # Return 1 for spoofed segments, 0 for authentic
+    if time_s >= SPOOF_START_TIME:
+        return 1
+    return 0
 ```
 
-**Características**:
-- Sinais autênticos: C/N0 40-50 dB-Hz, Doppler ±5 kHz
-- Sinais spoofed: Power attacks (5-15 dB acima), secondary peaks
+## 📚 Documentation
 
-### FGI-SpoofRepo (Dataset Real)
+Detailed documentation is available in the `docs/` directory:
 
-**Fonte**: Finnish Geospatial Institute  
-**Link**: https://github.com/Finnish-Geospatial-Institute/FGI-SpoofRepo
+- **[DECISIONS.md](docs/DECISIONS.md)**: Technical decisions and justifications
+  - Why specific features were chosen
+  - Signal processing techniques explained
+  - Algorithm selection rationale
+  - Connection to Signal and Systems theory
 
-**Instruções de Instalação**:
+### Key Concepts
 
-1. Baixe o dataset do GitHub (>10 GB)
-2. Extraia para `data/raw/fgi-spoof-repo/`
-3. Estrutura esperada:
-   ```
-   data/raw/fgi-spoof-repo/
-   ├── scenario_1/
-   │   ├── authentic/
-   │   │   └── *.bin
-   │   └── spoofed/
-   │       └── *.bin
-   └── scenario_2/
-       └── ...
-   ```
+#### Signal Processing Pipeline
+1. **DC Removal**: Removes hardware-induced offset
+2. **Frequency Correction**: Compensates for Doppler and IF
+3. **Interference Mitigation**: Suppresses RFI and impulsive noise
+4. **Normalization**: Standardizes power levels
 
-**Uso**:
-```python
-from src.utils.data_loader import load_fgi_dataset
+#### Feature Extraction
+- **Peak-to-Secondary Ratio**: Measures correlation peak purity (decreases with spoofing)
+- **Asymmetry**: Quantifies peak imbalance (increases with overlapping signals)
+- **C/N0**: Carrier-to-noise density ratio (increases in power attacks)
 
-signals, labels, metadata = load_fgi_dataset('data/raw/fgi-spoof-repo')
-```
+#### Models
+- **Random Forest**: Best overall performance, handles non-linear relationships
+- **SVM**: Good for high-dimensional feature spaces
+- **MLP**: Neural network for complex pattern learning
 
-### TEXBAT (Dataset de Referência)
+## 🧪 Testing
 
-**Descrição**: Texas Spoofing Test Battery - dataset acadêmico
-
-**Características**:
-- Formato: Binário int16 interleaved I/Q
-- Taxa de amostragem: 5 MHz (configurável)
-- Ground truth: Time-based (início do spoofing em timestamp conhecido)
-
-**Instruções**:
-
-1. Obtenha o dataset TEXBAT (contato: instituições acadêmicas)
-2. Coloque arquivos `.bin`/`.dat` em `data/raw/texbat/`
-3. Configure o tempo de início do spoofing (padrão: 17.0s)
-
-**Uso**:
-```python
-from src.utils.data_loader import load_texbat_dataset
-
-signals, labels, metadata = load_texbat_dataset(
-    'data/raw/texbat',
-    fs=5e6,
-    spoof_start_time=17.0
-)
-```
-
----
-
-## 📓 Notebooks
-
-### 1. EDA.ipynb - Análise Exploratória
-
-**Conteúdo**:
-- Visualização de sinais GPS (tempo e frequência)
-- Constelações IQ
-- Perfis de correlação autênticos vs spoofed
-- Distribuições de C/N0
-
-**Execução**:
-```bash
-jupyter notebook notebooks/EDA.ipynb
-```
-
-### 2. feature_demo.ipynb - Demonstração de Features
-
-**Conteúdo**:
-- Extração passo-a-passo de features
-- Análise de importância de features
-- Correlação entre features
-- Distribuições por classe
-
-### 3. training_eval.ipynb - Treinamento e Avaliação
-
-**Conteúdo**:
-- Treinamento de Random Forest, SVM, MLP
-- Comparação de modelos
-- Métricas detalhadas (confusion matrix, ROC curves)
-- Persistência de modelos
-
----
-
-## 🧪 Testes
-
-O projeto inclui testes unitários e de integração com pytest.
-
-### Executar Todos os Testes
+Run unit tests:
 
 ```bash
-pytest tests/ -v
+python -m pytest tests/
 ```
 
-### Executar Testes Específicos
+Run specific test module:
 
 ```bash
-# Testes de preprocessing
-pytest tests/test_preprocessing.py -v
-
-# Testes de features
-pytest tests/test_features.py -v
-
-# Testes de pipeline completo
-pytest tests/test_pipeline.py -v
+python -m pytest tests/test_preprocessing.py -v
 ```
 
-### Coverage
+## 🤝 Contributing
 
-```bash
-pytest tests/ --cov=src --cov-report=html
-```
+Contributions are welcome! Please:
 
-Abra `htmlcov/index.html` para ver relatório detalhado.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
----
+## 📄 License
 
-## 📚 Documentação Técnica
+This project is developed for academic purposes as part of the ES413 course.
 
-Consulte [`docs/DECISIONS.md`](docs/DECISIONS.md) para:
+## 🙏 Acknowledgments
 
-- Fundamentos de Sinais e Sistemas aplicados
-- Justificativa para escolha de features
-- Teoria de correlação e códigos C/A
-- Estimativa de C/N0 e limitações
-- Escolha de modelos de ML
-- Referências bibliográficas
+- **TEXBAT Dataset**: GPS spoofing test dataset
+- **IS-GPS-200**: GPS Interface Specification for C/A code generation
+- **Course**: Sinais e Sistemas (ES413)
 
-**Tópicos principais**:
-- Geração de Códigos C/A (Gold Sequences)
-- Propriedades de Autocorrelação
-- Métricas SQM (Peak-to-Secondary, FWHM, Asymmetry)
-- C/N0 vs SNR
-- Random Forest vs SVM vs MLP
-- Balanceamento de classes (SMOTE vs Class Weight)
+## 📧 Contact
+
+For questions or issues, please open an issue on GitHub.
 
 ---
 
-## 🔧 Configuração Avançada
-
-### Personalizar Parâmetros do Pipeline
-
-Edite `scripts/script_run_pipeline.py` ou use flags CLI:
-
-```bash
-python scripts/script_run_pipeline.py \
-  --mode synthetic \
-  --num-samples 500 \
-  --model random_forest \
-  --use-smote \
-  --fs 5e6 \
-  --duration 0.5 \
-  --output-dir results/ \
-  --random-seed 42
-```
-
-**Parâmetros disponíveis**:
-- `--mode`: synthetic, fgi, texbat
-- `--model`: random_forest, svm, mlp
-- `--use-smote`: Ativar SMOTE para balanceamento
-- `--fs`: Frequência de amostragem (Hz)
-- `--duration`: Duração dos segmentos (segundos)
-- `--spoof-time`: Tempo de início do spoofing (TEXBAT)
-
-### Adicionar Novos Modelos
-
-1. Implemente em `src/models/train.py`
-2. Adicione à função `train_model()` com parâmetros padrão
-3. Atualize documentação
-
----
-
-## 🤝 Contribuindo
-
-Contribuições são bem-vindas!
-
-### Diretrizes
-
-1. Fork o projeto
-2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
-3. Commit suas mudanças (`git commit -m 'Add nova feature'`)
-4. Push para a branch (`git push origin feature/nova-feature`)
-5. Abra um Pull Request
-
-### Checklist de PR
-
-- [ ] Código segue estilo do projeto (PEP8)
-- [ ] Testes adicionados para novas funcionalidades
-- [ ] Todos os testes passam (`pytest`)
-- [ ] Documentação atualizada (README, DECISIONS.md)
-- [ ] Docstrings em funções públicas
-
----
-
-## 📄 Licença
-
-Este projeto foi desenvolvido para fins acadêmicos (ES413 - Cin/UFPE).
-
----
-
-## 📧 Contato
-
-**Projeto**: SinaisProject  
-**Repositório**: https://github.com/BlackSardes/SinaisProject  
-**Disciplina**: ES413 - Sinais e Sistemas (Cin/UFPE)
-
----
-
-## 🙏 Agradecimentos
-
-- **Docentes de ES413**: Pelos fundamentos de Sinais e Sistemas
-- **Finnish Geospatial Institute**: Pelo dataset FGI-SpoofRepo
-- **Comunidade de GNSS Security**: Pelas referências e datasets
-
----
-
-## 📝 Changelog
-
-### v1.0.0 (2024-12-06)
-
-**Implementado**:
-- ✅ Pipeline completa de pré-processamento
-- ✅ Extração de features SQM e potência
-- ✅ Modelos de ML (Random Forest, SVM, MLP)
-- ✅ Gerador de dados sintéticos
-- ✅ Suporte para FGI-SpoofRepo e TEXBAT
-- ✅ Notebooks de análise e treinamento
-- ✅ Testes unitários e de integração
-- ✅ Documentação técnica completa
-
-**Próximos passos**:
-- Multi-PRN fusion
-- Temporal features (LSTM)
-- Real-time processing
-- GUI para visualização
-
----
-
-**Desenvolvido com ❤️ para detecção de spoofing GPS**
+**Note**: This project requires GPS signal data to function. Synthetic signals can be generated for testing, but real spoofing detection requires authentic datasets like TEXBAT or FGI.

@@ -1,173 +1,394 @@
 """
-Feature extraction pipeline and preprocessing.
+Feature Extraction Pipeline
+
+This module provides a complete pipeline for extracting features from
+GPS signals for spoofing detection.
 """
+
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
+from sklearn.impute import SimpleImputer
 
-from .correlation import compute_cross_correlation, extract_correlation_features
-from .temporal import extract_temporal_features
+from ..preprocessing.prn_codes import generate_local_code_oversampled
+from .correlation import compute_correlation_fft, extract_peak_metrics, extract_temporal_gradient
+from .statistical import extract_all_statistical_features
 
 
-def build_feature_vector(signal: np.ndarray, prn_code: np.ndarray, fs: float,
-                         ca_chip_rate: float = 1.023e6, 
-                         label: Optional[int] = None,
-                         metadata: Optional[Dict] = None) -> Dict[str, float]:
+def extract_features_from_segment(
+    signal: np.ndarray,
+    fs: float,
+    prn: int,
+    ca_chip_rate: float = 1.023e6,
+    include_statistical: bool = True
+) -> Dict[str, float]:
     """
-    Build complete feature vector from a signal window.
+    Extract all features from a signal segment.
     
-    Args:
-        signal: Complex IQ signal window
-        prn_code: PRN code for correlation
-        fs: Sampling frequency (Hz)
-        ca_chip_rate: C/A code chip rate (Hz)
-        label: Optional ground truth label
-        metadata: Optional metadata (filename, segment info, etc.)
-    
-    Returns:
-        Dictionary containing all features
+    Parameters
+    ----------
+    signal : np.ndarray
+        Preprocessed complex signal segment
+    fs : float
+        Sampling frequency in Hz
+    prn : int
+        PRN number for local code generation
+    ca_chip_rate : float, optional
+        C/A chip rate in Hz (default: 1.023e6)
+    include_statistical : bool, optional
+        Include statistical/spectral/temporal features (default: True)
+        
+    Returns
+    -------
+    dict
+        Feature dictionary with all extracted features
+        
+    Notes
+    -----
+    This function combines:
+    1. Correlation-based features (peak metrics)
+    2. Power-based features (C/N0, SNR)
+    3. Statistical features (mean, std, skewness, kurtosis)
+    4. Spectral features (frequency domain)
+    5. Temporal features (time domain)
     """
     features = {}
     
-    # Add metadata if provided
-    if metadata is not None:
-        features.update(metadata)
+    # Generate local PRN code
+    local_code = generate_local_code_oversampled(prn, fs, len(signal), ca_chip_rate)
     
     # Compute correlation
-    corr_profile = compute_cross_correlation(signal, prn_code)
+    correlation = compute_correlation_fft(signal, local_code)
     
-    # Extract correlation features
-    corr_features = extract_correlation_features(corr_profile, fs, ca_chip_rate)
-    features.update(corr_features)
+    # Extract correlation peak metrics
+    samples_per_chip = int(fs / ca_chip_rate)
+    peak_metrics = extract_peak_metrics(correlation, samples_per_chip, fs)
+    features.update(peak_metrics)
     
-    # Extract temporal features
-    temporal_features = extract_temporal_features(
-        signal, fs, 
-        correlation_peak=corr_features.get('peak_height', 0.0),
-        correlation_secondary=corr_features.get('secondary_peak_value', 0.0)
-    )
-    features.update(temporal_features)
-    
-    # Add label if provided
-    if label is not None:
-        features['label'] = label
+    # Extract statistical features if requested
+    if include_statistical:
+        stat_features = extract_all_statistical_features(
+            signal,
+            fs,
+            peak_metrics.get('peak_value'),
+            peak_metrics.get('secondary_peak_value')
+        )
+        features.update(stat_features)
     
     return features
 
 
-def build_feature_dataframe(signals: List[np.ndarray], prn_code: np.ndarray, 
-                            fs: float, labels: Optional[List[int]] = None,
-                            metadata_list: Optional[List[Dict]] = None) -> pd.DataFrame:
+def extract_features_from_file(
+    file_path: str,
+    fs: float,
+    prn: int,
+    segment_duration: float,
+    total_duration: Optional[float] = None,
+    overlap: float = 0.5,
+    preprocess_config: Optional[Dict] = None,
+    label_func: Optional[callable] = None,
+    ca_chip_rate: float = 1.023e6,
+    include_statistical: bool = True,
+    verbose: bool = True
+) -> pd.DataFrame:
     """
-    Build feature DataFrame from multiple signal windows.
+    Extract features from entire file using sliding windows.
     
-    Args:
-        signals: List of signal windows
-        prn_code: PRN code for correlation
-        fs: Sampling frequency (Hz)
-        labels: Optional list of labels
-        metadata_list: Optional list of metadata dicts
-    
-    Returns:
-        DataFrame with features for all signals
-    """
-    feature_dicts = []
-    
-    for i, signal in enumerate(signals):
-        label = labels[i] if labels is not None else None
-        metadata = metadata_list[i] if metadata_list is not None else None
+    Parameters
+    ----------
+    file_path : str
+        Path to signal file
+    fs : float
+        Sampling frequency in Hz
+    prn : int
+        PRN number
+    segment_duration : float
+        Duration of each segment in seconds
+    total_duration : float, optional
+        Total duration to process in seconds (None = entire file)
+    overlap : float, optional
+        Overlap fraction between segments (default: 0.5)
+    preprocess_config : dict, optional
+        Preprocessing configuration
+    label_func : callable, optional
+        Function to assign labels: label = func(segment_start_time)
+    ca_chip_rate : float, optional
+        C/A chip rate in Hz
+    include_statistical : bool, optional
+        Include statistical features
+    verbose : bool, optional
+        Print progress (default: True)
         
-        features = build_feature_vector(signal, prn_code, fs, label=label, metadata=metadata)
-        feature_dicts.append(features)
-    
-    return pd.DataFrame(feature_dicts)
-
-
-def preprocess_features(X: pd.DataFrame, y: Optional[pd.Series] = None,
-                       imputer: Optional[SimpleImputer] = None,
-                       scaler: Optional[StandardScaler] = None,
-                       pca: Optional[PCA] = None,
-                       feature_columns: Optional[List[str]] = None,
-                       fit: bool = True) -> Tuple[np.ndarray, Optional[SimpleImputer], 
-                                                   Optional[StandardScaler], Optional[PCA]]:
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with features for each segment
+        
+    Notes
+    -----
+    This function processes an entire file in segments, extracting
+    features from each segment and organizing them into a DataFrame
+    for machine learning.
     """
-    Preprocess features with imputation, scaling, and optional PCA.
+    from ..preprocessing.signal_io import load_signal
+    from ..preprocessing.pipeline import preprocess_signal
     
-    Args:
-        X: Feature DataFrame or array
-        y: Optional target (for stratified operations, not used currently)
-        imputer: Fitted imputer (or None to create new)
-        scaler: Fitted scaler (or None to create new)
-        pca: Fitted PCA (or None to skip PCA)
-        feature_columns: List of feature column names to use
-        fit: Whether to fit transformers (True for training, False for inference)
+    # Calculate segment parameters
+    num_samples_per_segment = int(fs * segment_duration)
+    step_samples = int(num_samples_per_segment * (1 - overlap))
     
-    Returns:
-        Tuple of (transformed features, imputer, scaler, pca)
-    """
-    # Convert to DataFrame if needed
-    if not isinstance(X, pd.DataFrame):
-        X = pd.DataFrame(X)
-    
-    # Select feature columns
-    if feature_columns is not None:
-        X = X[feature_columns]
+    if total_duration is not None:
+        total_samples = int(fs * total_duration)
     else:
-        # Auto-select numeric columns, exclude metadata
-        exclude_cols = ['label', 'filename', 'segment_start_s', 'prn', 'segment_index']
-        feature_columns = [col for col in X.columns if col not in exclude_cols and 
-                          pd.api.types.is_numeric_dtype(X[col])]
-        X = X[feature_columns]
+        # Try to determine file size (for binary files)
+        import os
+        file_size = os.path.getsize(file_path)
+        # Assume int16 I/Q pairs (4 bytes per complex sample)
+        total_samples = file_size // 4
     
-    X_array = X.values
+    # Extract features for each segment
+    features_list = []
+    segment_idx = 0
     
-    # Imputation
-    if imputer is None and fit:
-        imputer = SimpleImputer(strategy='median')
-        X_array = imputer.fit_transform(X_array)
-    elif imputer is not None:
-        if fit:
-            X_array = imputer.fit_transform(X_array)
-        else:
-            X_array = imputer.transform(X_array)
+    for start_sample in range(0, total_samples - num_samples_per_segment + 1, step_samples):
+        # Load segment
+        signal = load_signal(file_path, start_sample, num_samples_per_segment)
+        
+        if signal is None or len(signal) < num_samples_per_segment:
+            continue
+        
+        # Preprocess
+        if preprocess_config is not None:
+            signal = preprocess_signal(signal, fs, preprocess_config)
+        
+        # Extract features
+        features = extract_features_from_segment(
+            signal, fs, prn, ca_chip_rate, include_statistical
+        )
+        
+        # Add metadata
+        segment_start_time = start_sample / fs
+        features['segment_start_time'] = segment_start_time
+        features['segment_index'] = segment_idx
+        features['prn'] = prn
+        features['file_path'] = file_path
+        
+        # Add label if function provided
+        if label_func is not None:
+            features['label'] = label_func(segment_start_time)
+        
+        features_list.append(features)
+        segment_idx += 1
+        
+        if verbose and segment_idx % 10 == 0:
+            print(f"Processed {segment_idx} segments ({segment_start_time:.1f}s)...")
     
-    # Scaling
-    if scaler is None and fit:
-        scaler = StandardScaler()
-        X_array = scaler.fit_transform(X_array)
-    elif scaler is not None:
-        if fit:
-            X_array = scaler.fit_transform(X_array)
-        else:
-            X_array = scaler.transform(X_array)
+    # Convert to DataFrame
+    df = pd.DataFrame(features_list)
     
-    # PCA (optional)
-    if pca is not None:
-        if fit:
-            X_array = pca.fit_transform(X_array)
-        else:
-            X_array = pca.transform(X_array)
+    if verbose:
+        print(f"Feature extraction complete: {len(df)} segments")
     
-    return X_array, imputer, scaler, pca
+    return df
 
 
-def select_features(X: pd.DataFrame, feature_names: List[str]) -> pd.DataFrame:
+def create_feature_pipeline(
+    feature_selection: bool = False,
+    n_features: Optional[int] = None,
+    pca: bool = False,
+    n_components: Optional[int] = None,
+    handle_missing: bool = True,
+    normalize: bool = True
+) -> 'FeaturePipeline':
     """
-    Select specific features from DataFrame.
+    Create a feature processing pipeline.
     
-    Args:
-        X: Feature DataFrame
-        feature_names: List of feature names to select
-    
-    Returns:
-        DataFrame with selected features
+    Parameters
+    ----------
+    feature_selection : bool, optional
+        Apply feature selection (default: False)
+    n_features : int, optional
+        Number of features to select (if feature_selection=True)
+    pca : bool, optional
+        Apply PCA dimensionality reduction (default: False)
+    n_components : int, optional
+        Number of PCA components (if pca=True)
+    handle_missing : bool, optional
+        Handle missing values (default: True)
+    normalize : bool, optional
+        Normalize features (default: True)
+        
+    Returns
+    -------
+    FeaturePipeline
+        Configured feature pipeline
     """
-    available_features = [f for f in feature_names if f in X.columns]
-    if len(available_features) < len(feature_names):
-        missing = set(feature_names) - set(available_features)
-        print(f"Warning: Missing features: {missing}")
+    return FeaturePipeline(
+        feature_selection=feature_selection,
+        n_features=n_features,
+        pca=pca,
+        n_components=n_components,
+        handle_missing=handle_missing,
+        normalize=normalize
+    )
+
+
+class FeaturePipeline:
+    """
+    Feature processing pipeline for GPS spoofing detection.
     
-    return X[available_features]
+    This pipeline handles:
+    - Missing value imputation
+    - Feature normalization
+    - Feature selection
+    - Dimensionality reduction (PCA)
+    """
+    
+    def __init__(
+        self,
+        feature_selection: bool = False,
+        n_features: Optional[int] = None,
+        pca: bool = False,
+        n_components: Optional[int] = None,
+        handle_missing: bool = True,
+        normalize: bool = True
+    ):
+        self.feature_selection = feature_selection
+        self.n_features = n_features
+        self.pca = pca
+        self.n_components = n_components
+        self.handle_missing = handle_missing
+        self.normalize = normalize
+        
+        # Components (initialized during fit)
+        self.imputer = None
+        self.scaler = None
+        self.feature_selector = None
+        self.pca_transformer = None
+        self.feature_names = None
+        self.selected_features = None
+    
+    def fit(self, X: pd.DataFrame, y: Optional[np.ndarray] = None) -> 'FeaturePipeline':
+        """
+        Fit the pipeline to training data.
+        
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix
+        y : np.ndarray, optional
+            Labels (for supervised feature selection)
+            
+        Returns
+        -------
+        self
+        """
+        self.feature_names = X.columns.tolist()
+        
+        # Handle missing values
+        if self.handle_missing:
+            self.imputer = SimpleImputer(strategy='mean')
+            X_imputed = self.imputer.fit_transform(X)
+            X = pd.DataFrame(X_imputed, columns=self.feature_names)
+        
+        # Normalize features
+        if self.normalize:
+            self.scaler = StandardScaler()
+            X_scaled = self.scaler.fit_transform(X)
+            X = pd.DataFrame(X_scaled, columns=self.feature_names)
+        
+        # Feature selection
+        if self.feature_selection and y is not None:
+            from sklearn.feature_selection import SelectKBest, f_classif
+            
+            if self.n_features is None:
+                self.n_features = min(20, X.shape[1])
+            
+            self.feature_selector = SelectKBest(f_classif, k=self.n_features)
+            self.feature_selector.fit(X, y)
+            self.selected_features = [self.feature_names[i] for i in self.feature_selector.get_support(indices=True)]
+        
+        # PCA
+        if self.pca:
+            if self.n_components is None:
+                self.n_components = min(10, X.shape[1])
+            
+            self.pca_transformer = PCA(n_components=self.n_components)
+            self.pca_transformer.fit(X)
+        
+        return self
+    
+    def transform(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Transform features using fitted pipeline.
+        
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix
+            
+        Returns
+        -------
+        np.ndarray
+            Transformed features
+        """
+        # Handle missing values
+        if self.handle_missing and self.imputer is not None:
+            X_imputed = self.imputer.transform(X)
+            X = pd.DataFrame(X_imputed, columns=self.feature_names)
+        
+        # Normalize
+        if self.normalize and self.scaler is not None:
+            X_scaled = self.scaler.transform(X)
+            X = pd.DataFrame(X_scaled, columns=self.feature_names)
+        
+        # Feature selection
+        if self.feature_selection and self.feature_selector is not None:
+            X = X[self.selected_features]
+        
+        # PCA
+        if self.pca and self.pca_transformer is not None:
+            X = self.pca_transformer.transform(X)
+        
+        return X if isinstance(X, np.ndarray) else X.values
+    
+    def fit_transform(self, X: pd.DataFrame, y: Optional[np.ndarray] = None) -> np.ndarray:
+        """
+        Fit and transform in one step.
+        
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix
+        y : np.ndarray, optional
+            Labels
+            
+        Returns
+        -------
+        np.ndarray
+            Transformed features
+        """
+        return self.fit(X, y).transform(X)
+    
+    def get_feature_importance(self) -> Optional[pd.DataFrame]:
+        """
+        Get feature importance from selection.
+        
+        Returns
+        -------
+        pd.DataFrame or None
+            Feature importance scores (if selection was used)
+        """
+        if self.feature_selector is None:
+            return None
+        
+        scores = self.feature_selector.scores_
+        importance_df = pd.DataFrame({
+            'feature': self.feature_names,
+            'score': scores
+        })
+        importance_df = importance_df.sort_values('score', ascending=False)
+        
+        return importance_df

@@ -1,429 +1,563 @@
-# Decisões Técnicas e Fundamentos - Detecção de Spoofing GPS
 
-## Sumário Executivo
+# Technical Decisions and Justifications
 
-Este documento detalha as escolhas técnicas, fundamentos de Sinais e Sistemas, e justificativas para o pipeline de detecção de spoofing em sinais GPS implementado neste repositório.
+This document explains the technical decisions made in the GPS Spoofing Detection project, with emphasis on the connection to Signal Processing and Machine Learning theory.
 
----
+## Table of Contents
 
-## 1. Fundamentos de Sinais GPS e C/A Code
-
-### 1.1 Estrutura do Sinal GPS
-
-Os sinais GPS L1 C/A (Coarse/Acquisition) são sinais BPSK (Binary Phase Shift Keying) compostos por:
-- **Frequência portadora**: 1575.42 MHz
-- **Código C/A**: Sequência Gold de 1023 chips a 1.023 MHz (≈1 ms de período)
-- **Mensagem de navegação**: 50 bps modulada sobre o código
-
-**Decisão**: O pipeline foca na análise do código C/A, pois:
-1. É a base da aquisição e rastreamento
-2. Distorções no perfil de correlação indicam spoofing
-3. Análise independente da mensagem de navegação
-
-### 1.2 Geração do Código C/A
-
-Implementação em `src/preprocessing/signal_processing.py::generate_ca_code()`.
-
-**Fundamento**: Os códigos C/A são sequências Gold geradas por dois registradores de deslocamento linear com realimentação (LFSR):
-- G1: polinômio x¹⁰ + x³ + 1
-- G2: polinômio x¹⁰ + x⁹ + x⁸ + x⁶ + x³ + x² + 1
-
-**Propriedades importantes**:
-- **Ortogonalidade**: Autocorrelação apresenta pico único em fase zero
-- **Ruído-like**: Fora de fase, a correlação é próxima de zero
-- **Unicidade**: Cada PRN (1-32) tem um padrão único de taps do G2
-
-**Limitação conhecida**: Não implementamos os códigos P(Y) ou códigos militares.
+1. [Preprocessing Module](#preprocessing-module)
+2. [Feature Extraction](#feature-extraction)
+3. [Machine Learning Models](#machine-learning-models)
+4. [Evaluation Strategy](#evaluation-strategy)
+5. [References](#references)
 
 ---
 
-## 2. Pré-processamento de Sinais
+## Preprocessing Module
 
-### 2.1 Normalização de Potência
+### 1. DC Offset Removal
 
-**Função**: `normalize_by_power()` em `signal_processing.py`
+**Decision**: Always remove DC offset before processing.
 
-**Fundamento de Sinais e Sistemas**:
-A potência média de um sinal complexo x[n] é:
+**Justification**:
+- **Signal Theory**: DC offset is a constant bias in the signal that doesn't carry information
+- **Hardware Reality**: ADC and RF front-end imperfections introduce DC
+- **Impact on Correlation**: DC offset creates a spurious peak at zero lag in autocorrelation
+- **Implementation**: Simple subtraction of signal mean: `signal - mean(signal)`
+
+**Mathematical Basis**:
 ```
-P = E[|x[n]|²] = (1/N) Σ |x[n]|²
-```
-
-**Decisão**: Normalizar para P=1 (0 dB) porque:
-1. **Invariância ao ganho**: Receptores têm ganhos de RF variáveis
-2. **Comparabilidade**: Permite comparar C/N0 entre segmentos
-3. **Estabilidade numérica**: Evita overflow/underflow em cálculos
-
-**Trade-off**: Perde-se informação absoluta de potência, mas esta é recuperada através da estimativa de C/N0.
-
-### 2.2 Correção de Frequência Doppler/IF
-
-**Função**: `apply_frequency_correction()`
-
-**Fundamento (Propriedade da Modulação)**:
-Multiplicar no tempo por e^(-j2πf_corr·t) desloca o espectro em -f_corr Hz.
-
-```
-y[n] = x[n] · e^(-j2πf_corr·n/fs)
+x_clean(t) = x(t) - E[x(t)]
 ```
 
-**Aplicação GPS**:
-- **Doppler**: Movimento relativo satélite-receptor (até ±5 kHz em L1)
-- **IF (Frequência Intermediária)**: Frequência após downconversion no receptor
+### 2. Frequency Correction (Doppler/IF Removal)
 
-**Decisão**: Implementar correção explícita porque:
-- Correlação no tempo requer coerência de fase
-- Doppler não corrigido causa atenuação do pico de correlação (efeito sinc)
+**Decision**: Apply frequency correction through complex multiplication with local oscillator.
 
-**Limitação**: No pipeline atual, assumimos f_corr fornecido; em sistema completo, seria estimado via busca Doppler.
+**Justification**:
+- **Frequency Shifting Property**: Multiplication by exp(-j2πft) shifts spectrum by -f Hz
+- **GPS Reality**: Signals arrive with:
+  - Intermediate Frequency (IF): From RF front-end downconversion
+  - Doppler shift: Due to satellite motion (~±5 kHz for GPS L1)
+- **Correlation Requirement**: For optimal correlation, received and local codes must be frequency-aligned
 
-### 2.3 Filtragem Bandpass
-
-**Função**: `bandpass_filter()` - Butterworth IIR
-
-**Fundamento**:
-Filtro passa-faixa remove componentes fora da banda de interesse:
-- **Rejeita DC drift**: Problemas de hardware (offset I/Q)
-- **Limita ruído**: Reduz ruído fora da banda do sinal
-
-**Parâmetros GPS**:
-- Banda típica: ±2 MHz em torno da portadora (acomoda 95% da energia do espectro BPSK)
-
-**Decisão**: Uso de Butterworth porque:
-- Resposta em magnitude plana na banda passante
-- Implementação eficiente (IIR de ordem baixa)
-
-**Alternativa rejeitada**: Notch filters específicos (implementados em `pre_process.py` original) - menos genéricos.
-
-### 2.4 Remoção de Outliers
-
-**Função**: `remove_outliers()`
-
-**Métodos disponíveis**:
-1. **Median + MAD**: Limiar robusto baseado em Median Absolute Deviation
-2. **IQR (Interquartile Range)**: Baseado em percentis
-
-**Fundamento**: Interferências impulsivas (e.g., radar, switching power) criam picos de amplitude que:
-- Distorcem estatísticas do sinal
-- Mascaram o pico de correlação
-- Introduzem viés na estimativa de C/N0
-
-**Decisão**: Clipping suave (limitar ao threshold) em vez de remoção porque:
-- Preserva comprimento do sinal
-- Evita descontinuidades temporais
-
----
-
-## 3. Extração de Features: Métricas SQM (Signal Quality Monitoring)
-
-### 3.1 Correlação Cruzada via FFT
-
-**Função**: `compute_cross_correlation()` em `correlation.py`
-
-**Fundamento (Teorema da Convolução)**:
+**Mathematical Basis**:
 ```
-corr[n] = IFFT(FFT(signal) · conj(FFT(code)))
+x_baseband(t) = x_IF(t) · exp(-j2π·f_correction·t)
+
+where f_correction = f_IF + f_doppler
 ```
 
-**Vantagens**:
-- Complexidade O(N log N) vs O(N²) para convolução direta
-- Essencial para sinais longos (milhões de amostras)
+**Signal & Systems Connection**:
+- Modulation property of Fourier Transform
+- Preserves signal information while shifting frequency
 
-**Decisão**: Sempre usar FFT porque:
-- GPS: segmentos típicos de 0.5s a 5 MHz = 2.5M amostras
-- Speedup ~1000x comparado a convolução direta
+### 3. Notch Filter for RFI Suppression
 
-### 3.2 Feature: Peak-to-Secondary Ratio (P/S)
+**Decision**: Use IIR notch filter (Butterworth-based) for narrowband interference.
 
-**Implementação**: `extract_correlation_features()` - `peak_to_secondary`
+**Justification**:
+- **Interference Type**: Narrowband RFI from communication systems, jammers
+- **Filter Design**:
+  - IIR: More efficient than FIR for narrow notches
+  - Quality factor Q: Controls notch width (BW ≈ f₀/Q)
+  - Default Q=30: Narrow enough to preserve GPS bandwidth (~2 MHz)
 
-**Fundamento de Sinais e Sistemas**:
-A autocorrelação de códigos Gold ideais tem:
-- **Pico principal**: Valor máximo em fase zero
-- **Lóbulos secundários**: ~-21 dB abaixo do pico (teórico)
-
-**Relação com Spoofing**:
-- **Multipath**: Cria réplicas atrasadas → picos secundários aumentam → P/S diminui
-- **Spoofing sincronizado**: Múltiplos sinais alinhados → deformação do pico → P/S diminui
-- **Spoofing dessincronizado**: Pico secundário explícito → P/S diminui drasticamente
-
-**Limiar típico**: P/S > 10 para sinal autêntico limpo.
-
-**Decisão**: Feature crítica porque:
-1. Direto indicador de integridade do código
-2. Robusto a variações de ganho (é uma razão)
-3. Base teórica sólida (propriedades de códigos Gold)
-
-### 3.3 Feature: Full Width at Half Maximum (FWHM) e Fractional Peak Width (FPW)
-
-**Implementação**: `fwhm`, `fpw` (80% do pico)
-
-**Fundamento**:
-O pico de autocorrelação ideal de um código Gold tem forma triangular com:
-- Base ≈ 2 chips
-- FWHM ≈ 1 chip
-
-**Alargamento do pico indica**:
-- **Multipath**: Soma de réplicas atrasadas
-- **Spoofing com sincronização imperfeita**: Picos sobrepostos
-- **Correlação parcial**: Código PRN incorreto ou distorção
-
-**Decisão**: FPW a 80% (em vez de 50%) porque:
-- Mais robusto a ruído (threshold maior)
-- Captura melhor a forma do "ombro" criado por spoofing
-
-### 3.4 Feature: Assimetria (Asymmetry)
-
-**Fórmula**:
+**Frequency Domain Analysis**:
 ```
-asymmetry = (A_right - A_left) / (A_right + A_left)
-```
-Onde A_right e A_left são as áreas à direita e esquerda do pico.
-
-**Fundamento**:
-Pico de autocorrelação ideal é simétrico. Assimetria surge de:
-- **Multipath com delay**: Energia adicional em uma direção
-- **Spoofing com offset de código**: Deslocamento assimétrico
-
-**Decisão**: Feature discriminativa, mas:
-- **Limitação**: Sensível a ruído em sinais de baixo C/N0
-- **Mitigação**: Usar janela maior (± 1 chip) para integração
-
-### 3.5 Feature: Skewness e Kurtosis
-
-**Implementação**: `scipy.stats.skew()`, `scipy.stats.kurtosis()`
-
-**Fundamento (Estatística):**
-- **Skewness**: Mede assimetria da distribuição em torno do pico
-- **Kurtosis**: Mede "cauda pesada" (outliers)
-
-**Relação com Spoofing**:
-Distribuições não-gaussianas indicam:
-- Sinais múltiplos sobrepostos (mistura de distribuições)
-- Interferência estruturada (não AWGN)
-
-**Decisão**: Features complementares para capturar morfologia complexa.
-
----
-
-## 4. Métricas de Potência
-
-### 4.1 Estimativa de C/N0 (Carrier-to-Noise Density Ratio)
-
-**Função**: `estimate_cn0_from_correlation()` e features em `temporal.py`
-
-**Fundamento Teórico**:
-C/N0 é a razão entre potência da portadora (C) e densidade espectral de potência de ruído (N0):
-```
-C/N0 [dB-Hz] = 10 log10(C / N0)
+H(f) has deep notch at f₀ with bandwidth BW = f₀/Q
 ```
 
-**Método de Estimação Simplificado**:
-1. **Potência do sinal**: Aproximada pelo quadrado do pico de correlação
-2. **Potência do ruído**: Média da correlação fora da janela do pico
-3. **Bandwidth de ruído**: Relacionado a fs (frequência de amostragem)
+**Trade-offs**:
+- **Pros**: Preserves GPS signal, removes interference
+- **Cons**: Phase distortion near notch (acceptable for magnitude-based correlation)
 
-**Fórmula implementada**:
-```python
-carrier_power = peak_value² / N_samples
-noise_power = (total_power - carrier_power)
-C/N0 = 10 log10(carrier_power / (noise_power / fs))
+### 4. Pulse Blanking
+
+**Decision**: Zero out samples exceeding threshold (default: 4σ).
+
+**Justification**:
+- **Interference Type**: Impulsive noise (radar pulses, lightning)
+- **Time-Domain Approach**: More effective than frequency-domain for transient events
+- **Threshold Selection**: 4σ captures 99.99% of Gaussian noise, flags outliers
+- **Non-linear**: Unlike filtering, completely removes corrupted samples
+
+**Statistical Basis**:
 ```
-
-**Limitações conhecidas**:
-1. **Não considera squaring loss**: Perda na demodulação (~2.5 dB)
-2. **Assume coerência perfeita**: Correção Doppler ideal
-3. **Simplifica cálculo de N0**: Ignora bandwidth do filtro de IF
-
-**Decisão**: Manter método simplificado porque:
-- Suficiente para detecção de anomalias relativas (não navegação absoluta)
-- Baixo custo computacional
-- Tendência consistente (aumento em power attacks)
-
-**Valores típicos**:
-- **Open-sky**: 40-50 dB-Hz
-- **Indoor/obscured**: 20-35 dB-Hz
-- **Spoofing power attack**: > 55 dB-Hz (suspeito)
-
-### 4.2 Signal-to-Noise Ratio (SNR)
-
-**Feature**: `snr_estimate`
-
-**Diferença vs C/N0**:
-- **SNR**: Razão de potências em bandwidth específico (adimensional ou dB)
-- **C/N0**: Normalizado pela densidade de ruído (dB-Hz)
-
-**Relação**:
-```
-C/N0 = SNR · BW_noise
-```
-
-**Uso no pipeline**: Feature adicional para modelos de ML (correlacionada com C/N0, mas comportamento diferente em alguns cenários).
-
----
-
-## 5. Modelagem e Classificação
-
-### 5.1 Escolha do Random Forest
-
-**Justificativa Técnica**:
-
-**Vantagens**:
-1. **Robusto a outliers**: Decisões baseadas em votação de árvores
-2. **Não-paramétrico**: Não assume distribuição dos dados
-3. **Feature importance**: Interpretabilidade via Gini importance
-4. **Balanceamento natural**: `class_weight='balanced'` ajusta pesos automaticamente
-
-**Comparação com alternativas**:
-- **SVM**: Mais lento em grandes datasets, requer normalização cuidadosa
-- **MLP (Neural Network)**: Requer mais dados, prone to overfitting em datasets pequenos
-- **Logistic Regression**: Assume relações lineares (features GPS são não-lineares)
-
-**Parâmetros otimizados**:
-```python
-{
-    'n_estimators': 100,      # Número de árvores (balanço bias-variance)
-    'max_depth': 15,          # Profundidade (evita overfitting)
-    'class_weight': 'balanced' # Ajusta para classes desbalanceadas
+x_blanked(t) = {
+  x(t),  if |x(t)| < μ + 4σ
+  0,     otherwise
 }
 ```
 
-**Decisão**: Random Forest como baseline porque:
-- Estado-da-arte em benchmarks de spoofing GPS
-- Rápido treinamento e inferência
-- Interpretável (importante para safety-critical applications)
+### 5. Power Normalization
 
-### 5.2 Balanceamento de Classes: SMOTE vs Class Weight
+**Decision**: Normalize to unit power: E[|x|²] = 1
 
-**Problema**: Datasets reais têm mais amostras autênticas que spoofed (desbalanceamento).
+**Justification**:
+- **Hardware Variability**: Different receivers have different gains
+- **Spoofing Independence**: Power level shouldn't be the only discriminant
+- **C/N0 Calculation**: Enables meaningful power comparisons
+- **ML Benefit**: Prevents features from being dominated by amplitude differences
 
-**Opções implementadas**:
-
-1. **Class Weight Balanced** (padrão):
-   ```python
-   w_class = N_samples / (n_classes × N_samples_class)
-   ```
-   - **Vantagem**: Simples, sem custo computacional
-   - **Desvantagem**: Não cria novas amostras
-
-2. **SMOTE (Synthetic Minority Over-sampling Technique)**:
-   - Gera amostras sintéticas interpolando entre vizinhos
-   - **Vantagem**: Aumenta diversidade do dataset
-   - **Desvantagem**: Pode criar amostras irrealistas
-
-**Decisão**: Oferecer ambas as opções (`use_smote` flag) porque:
-- Class weight suficiente para datasets grandes
-- SMOTE útil quando spoofing samples < 20-30
-
-**Evidência empírica**: Em experimentos com TEXBAT, class weight balanced teve performance equivalente a SMOTE com menor tempo de treinamento.
-
-### 5.3 Métricas de Avaliação
-
-**Métricas implementadas**:
-1. **Accuracy**: Fração de predições corretas
-2. **Precision**: TP / (TP + FP) - Evitar falsos alarmes
-3. **Recall (Sensitivity)**: TP / (TP + FN) - Detectar todos os spoofs
-4. **F1 Score**: Média harmônica de precision e recall
-5. **ROC AUC**: Área sob curva ROC (performance geral)
-6. **False Alarm Rate**: FP / (FP + TN)
-
-**Decisão - Priorizar Recall**: Em aplicações GPS safety-critical:
-- **Custo de FN (miss detection)**: ALTO (navegação comprometida)
-- **Custo de FP (false alarm)**: MÉDIO (backup systems podem ser ativados)
-
-**Threshold tuning**: Implementado via `predict_proba()` - permite ajustar threshold de decisão para aumentar recall.
+**Mathematical Basis**:
+```
+x_normalized = x / √(E[|x|²])
+```
 
 ---
 
-## 6. Validação e Testes
+## Feature Extraction
 
-### 6.1 Estratificação
+### Correlation-Based Features
 
-**Implementação**: `train_test_split(..., stratify=y)`
+#### 1. Peak-to-Secondary Ratio (P/S Ratio)
 
-**Fundamento**: Garante que a proporção de classes em treino e teste seja preservada.
+**Decision**: Primary spoofing detection feature.
 
-**Decisão**: Sempre estratificar porque:
-- Datasets de spoofing são frequentemente desbalanceados
-- Evita test sets não-representativos
+**Justification**:
+- **Autocorrelation Property**: GPS C/A codes have near-ideal autocorrelation
+  - Main peak: 1023 (code length)
+  - Max sidelobe: ±65
+  - P/S ratio: ~15.7 (23.9 dB)
+- **Spoofing Effect**: Multiple signal sources create additional peaks
+- **Theoretical Basis**: Sum of two correlation functions creates interference pattern
 
-### 6.2 Cross-Validation Estratificada
+**Mathematical Model**:
+```
+R_spoofed(τ) = R_authentic(τ) + α·R_spoofer(τ - δ)
 
-**Implementação**: `StratifiedKFold` com 5 folds
+where:
+- α: power ratio
+- δ: delay between signals
+```
 
-**Fundamento**: Combina:
-- **K-fold**: Múltiplas partições treino/validação
-- **Stratified**: Mantém proporção de classes em cada fold
+**Detection Principle**: P/S ratio decreases when secondary peaks emerge.
 
-**Decisão**: 5 folds (padrão sklearn) porque:
-- Trade-off entre variância da estimativa e custo computacional
-- 80/20 split em cada fold (razoável para datasets de 100-1000 amostras)
+**Expected Values**:
+- Authentic: >15 (often >20)
+- Spoofed: <10 (depends on delay δ)
 
-### 6.3 Reprodutibilidade
+#### 2. Full Width at Half Maximum (FWHM)
 
-**Implementação**: `random_state=42` em todas as funções estocásticas
+**Decision**: Measure correlation peak width.
 
-**Fundamento**: Permite:
-- Debugging
-- Comparação justa entre experimentos
-- Validação por terceiros
+**Justification**:
+- **Theoretical Width**: For GPS C/A code at fs, FWHM ≈ 1-2 chips
+- **Broadening Causes**:
+  - Multipath: Creates multiple delayed replicas
+  - Dual-signal spoofing: Overlapping peaks widen effective width
+  - Frequency mismatch: Sinc function widening
+- **Robustness**: Less sensitive to absolute power than peak value
 
-**Decisão**: Fixar seeds porque:
-- GPS spoofing detection requer validação rigorosa
-- Resultados devem ser auditáveis
+**Measurement**:
+```
+FWHM = max(τ_high) - min(τ_low)
+where R(τ_high) = R(τ_low) = 0.5·R_peak
+```
+
+#### 3. Peak Asymmetry
+
+**Decision**: Quantify left-right imbalance around peak.
+
+**Justification**:
+- **Ideal Case**: GPS C/A autocorrelation is symmetric (triangular main lobe)
+- **Asymmetry Source**: Overlapping authentic and spoofer signals with small delay
+- **Sensitivity**: Very sensitive to delay differences <1 chip
+
+**Calculation**:
+```
+Asymmetry = (Area_right - Area_left) / (Area_right + Area_left)
+
+where areas computed ±1 chip from peak
+```
+
+**Range**: [-1, +1], ideal = 0
+
+#### 4. Skewness and Kurtosis
+
+**Decision**: Higher-order statistical moments of correlation peak region.
+
+**Justification**:
+- **Normal Case**: GPS correlation has specific shape (triangular + noise)
+- **Skewness**: Detects asymmetry in distribution (third moment)
+- **Kurtosis**: Detects tail weight / peakedness (fourth moment)
+- **ML Value**: Captures subtle shape changes missed by simpler metrics
+
+**Statistical Basis**:
+```
+Skewness = E[(X - μ)³] / σ³
+Kurtosis = E[(X - μ)⁴] / σ⁴ - 3
+```
+
+### Power-Based Features
+
+#### 5. C/N0 (Carrier-to-Noise Density Ratio)
+
+**Decision**: Estimate C/N0 from correlation results.
+
+**Justification**:
+- **GPS Standard Metric**: Industry standard for signal quality
+- **Physical Meaning**: Carrier power divided by noise power density
+- **Spoofing Signature**: Most attacks use higher power to dominate receiver
+- **Typical Values**:
+  - Clear sky: 45-50 dB-Hz
+  - Urban: 30-40 dB-Hz
+  - Spoofing: Often >50 dB-Hz (power attack)
+
+**Estimation Method** (Narrowband-Wideband Power Ratio):
+```
+C/N0 = 10·log₁₀(P_carrier / N₀)
+
+where:
+P_carrier ≈ (Peak_corr)² / N_samples
+N₀ ≈ (Total_power - P_carrier) / BW
+```
+
+**Why It Works for Detection**:
+- Spoofing signal must be stronger than authentic to capture receiver
+- Sudden C/N0 increase is suspicious (satellites don't suddenly get closer)
+
+#### 6. Noise Floor Estimation
+
+**Decision**: Estimate noise from correlation function excluding peak region.
+
+**Justification**:
+- **Robust Estimator**: Uses median of non-peak regions
+- **Complementary to C/N0**: High C/N0 + high noise suggests jamming
+- **Baseline for Threshold**: Peak detection threshold = noise_floor + k·σ
+
+**Implementation**:
+```
+Noise_floor = median(R(τ)) for |τ - τ_peak| > 2 chips
+```
+
+### Statistical Features
+
+#### 7. Spectral Features
+
+**Decision**: Include frequency-domain characteristics.
+
+**Justification**:
+- **Frequency Anomalies**: Spoofing signal may have different Doppler
+- **Spectral Flatness**: Distinguishes tone-like (signal) from noise-like
+- **Bandwidth**: Changes if spoofing signal is not perfectly synchronized
+
+**Key Metrics**:
+- **Spectral Centroid**: Center of mass in frequency (detects Doppler errors)
+- **Spectral Spread**: Frequency dispersion
+- **Bandwidth (90%)**: Frequency range containing 90% of energy
+
+#### 8. Temporal Features
+
+**Decision**: Include time-domain statistics.
+
+**Justification**:
+- **Complementary**: Different view than correlation features
+- **Noise Characteristics**: Distribution changes under interference
+- **Phase Information**: Phase discontinuities indicate frequency jumps
+
+**Selected Features**:
+- Signal magnitude moments (mean, std, skewness, kurtosis)
+- Phase statistics
+- Zero-crossing rate
+- Autocorrelation at fixed lags
 
 ---
 
-## 7. Limitações e Trabalho Futuro
+## Machine Learning Models
 
-### 7.1 Limitações Conhecidas
+### Model Selection
 
-1. **C/N0 Estimation**: Método simplificado (erro ~3-5 dB vs métodos de referência)
-2. **Single PRN**: Pipeline atual não trata múltiplos satélites simultaneamente
-3. **Static Scenarios**: Não modela dinâmica temporal (receiver em movimento)
-4. **Spoofing Types**: Foca em power/meaconing attacks; não cobre sophisticated replay attacks
+#### 1. Random Forest (Primary Choice)
 
-### 7.2 Extensões Propostas
+**Decision**: Use Random Forest as primary classifier.
 
-1. **Multi-PRN Fusion**: Combinar features de múltiplos satélites
-2. **Temporal Features**: Derivadas temporais do C/N0, rate of change de SQMs
-3. **Deep Learning**: LSTM/CNN para capturar padrões temporais complexos
-4. **Transfer Learning**: Pré-treinar em datasets sintéticos, fine-tune em dados reais
+**Justification**:
+- **Non-linear**: GPS spoofing has non-linear decision boundaries
+- **Feature Interactions**: Automatically captures interactions (e.g., high C/N0 + low P/S ratio)
+- **Robust**: Less sensitive to outliers than single decision tree
+- **Interpretable**: Provides feature importance
+- **No Scaling Required**: Tree-based, doesn't require feature normalization
 
-### 7.3 Integração com Datasets Reais
+**Hyperparameters**:
+```python
+{
+    'n_estimators': 100,      # 100 trees balance accuracy/speed
+    'max_features': 'sqrt',   # Randomization for diversity
+    'class_weight': 'balanced' # Handle imbalanced classes
+}
+```
 
-**FGI-SpoofRepo**: Dataset finlandês com cenários outdoor/indoor
-- Requer download manual (> 10 GB)
-- Estrutura documentada em `data_loader.py`
+**Why It Works**:
+- Each tree learns different aspect of spoofing signature
+- Ensemble reduces variance
+- Voting provides confidence measure
 
-**TEXBAT**: Dataset de referência com spoofing scenarios
-- Ground truth baseado em timestamp (início do ataque conhecido)
-- Usado para validação de publicações acadêmicas
+#### 2. Support Vector Machine (SVM)
+
+**Decision**: Use RBF kernel SVM as alternative.
+
+**Justification**:
+- **High-Dimensional**: Effective in high-dimensional feature spaces
+- **Kernel Trick**: RBF kernel handles non-linear separation
+- **Margin Maximization**: Finds optimal separating hyperplane
+- **Theoretical Foundation**: Strong statistical learning theory basis
+
+**Hyperparameters**:
+```python
+{
+    'C': 1.0,                  # Regularization (default works well)
+    'kernel': 'rbf',           # Radial Basis Function for non-linearity
+    'gamma': 'scale',          # Adaptive to feature scale
+    'class_weight': 'balanced' # Imbalance handling
+}
+```
+
+**Trade-off**:
+- **Pros**: Strong theoretical guarantees, effective in high dimensions
+- **Cons**: Slower training than RF, requires feature scaling
+
+#### 3. Multi-Layer Perceptron (Neural Network)
+
+**Decision**: Include MLP for complex pattern learning.
+
+**Justification**:
+- **Universal Approximator**: Can learn any continuous function
+- **Feature Learning**: Automatically combines low-level features
+- **Adaptive**: Architecture can be tuned for specific datasets
+
+**Architecture**:
+```python
+{
+    'hidden_layers': (100, 50),  # Two hidden layers
+    'activation': 'relu',         # Non-linearity
+    'solver': 'adam',             # Adaptive learning rate
+    'early_stopping': True        # Prevent overfitting
+}
+```
+
+**Why Two Layers**:
+- First layer: Learns feature combinations
+- Second layer: Learns higher-level patterns
+- Not too deep: Prevents overfitting on small datasets
+
+### Class Imbalance Handling
+
+**Problem**: Spoofing events are rare (typically <20% of data).
+
+**Solutions Implemented**:
+
+#### 1. Class Weights (Preferred)
+
+**Decision**: Use `class_weight='balanced'` in models.
+
+**Justification**:
+- **Algorithmic**: Adjusts loss function to penalize minority class errors more
+- **No Data Duplication**: Doesn't artificially increase dataset size
+- **Fast**: No overhead compared to vanilla training
+
+**Mathematical Effect**:
+```
+Weight_class = N_total / (N_classes · N_class)
+
+Loss_weighted = Σ weight_i · loss_i
+```
+
+#### 2. SMOTE (Synthetic Minority Over-sampling Technique)
+
+**Decision**: Offer SMOTE as alternative option.
+
+**Justification**:
+- **Data Augmentation**: Creates synthetic minority class samples
+- **Mechanism**: Interpolates between existing minority samples
+- **Benefit**: Can improve recall (detecting actual spoofing)
+
+**How It Works**:
+```
+For each minority sample x:
+  1. Find K nearest minority neighbors
+  2. Randomly select one neighbor x_nn
+  3. Create synthetic: x_new = x + λ·(x_nn - x)
+     where λ ∈ [0, 1]
+```
+
+**Trade-off**:
+- **Pros**: Often improves minority class recall
+- **Cons**: Can introduce noise, increases training time
+
+### Cross-Validation Strategy
+
+**Decision**: Stratified K-Fold (K=5) cross-validation.
+
+**Justification**:
+- **Stratified**: Maintains class distribution in each fold
+- **K=5**: Standard choice, balance between variance and computational cost
+- **Why Not Leave-One-Out**: Too expensive, high variance
+- **Why Not Simple Split**: Doesn't utilize all data for validation
+
+**Process**:
+```
+For k = 1 to 5:
+  1. Hold out fold k as validation
+  2. Train on remaining 4 folds
+  3. Evaluate on fold k
+  4. Record metrics
+
+Final score = mean(fold_scores)
+```
 
 ---
 
-## 8. Referências Técnicas
+## Evaluation Strategy
 
-1. **GPS Signal Structure**: IS-GPS-200 (Interface Specification)
-2. **C/A Code Generation**: "Understanding GPS Principles and Applications" - Kaplan & Hegarty
-3. **Spoofing Detection**: IEEE papers on GNSS security (e.g., Psiaki et al., 2011)
-4. **Random Forests**: Breiman, "Random Forests", Machine Learning, 2001
-5. **SMOTE**: Chawla et al., "SMOTE: Synthetic Minority Over-sampling Technique", 2002
+### Metrics Selection
+
+#### Primary Metrics
+
+1. **F1-Score** (Harmonic mean of precision and recall)
+   - **Why**: Balances false positives and false negatives
+   - **Importance**: Single metric for imbalanced classes
+
+2. **Recall (Sensitivity)**
+   - **Definition**: TP / (TP + FN)
+   - **Meaning**: Percentage of spoofing attacks detected
+   - **Critical**: Missing spoofing is dangerous
+
+3. **Precision**
+   - **Definition**: TP / (TP + FP)
+   - **Meaning**: Percentage of alerts that are real
+   - **Important**: Too many false alarms reduce trust
+
+4. **Specificity (True Negative Rate)**
+   - **Definition**: TN / (TN + FP)
+   - **Meaning**: Percentage of authentic signals correctly identified
+   - **Use**: Ensures normal operations aren't disrupted
+
+#### Secondary Metrics
+
+5. **ROC AUC** (Area Under ROC Curve)
+   - **Threshold-Independent**: Evaluates classifier across all thresholds
+   - **Range**: [0, 1], random = 0.5, perfect = 1.0
+   - **Use**: Model comparison
+
+6. **False Alarm Rate**
+   - **Definition**: FP / (FP + TN)
+   - **Operational Meaning**: How often genuine signals trigger alerts
+   - **Target**: <1% for operational systems
+
+### Confusion Matrix Interpretation
+
+For GPS Spoofing Detection:
+
+```
+                 Predicted
+                Auth  Spoof
+Actual  Auth  |  TN  |  FP  |
+        Spoof |  FN  |  TP  |
+```
+
+**Implications**:
+- **TN (True Negative)**: Authentic signal correctly identified → Good
+- **FP (False Positive)**: False alarm → Nuisance, but safe
+- **FN (False Negative)**: Missed spoofing → **DANGEROUS**
+- **TP (True Positive)**: Spoofing detected → Critical success
+
+**Priority**: Minimize FN (maximize recall), then minimize FP (maximize precision).
+
+### Model Selection Criteria
+
+**Primary**: F1-Score (balance)
+**Tie-breaker**: Recall (safety-critical)
+**Constraint**: Precision >80% (limit false alarms)
 
 ---
 
-## 9. Glossário
+## Pipeline Design Philosophy
 
-- **C/A Code**: Coarse/Acquisition - código de espalhamento espectral do GPS civil
-- **C/N0**: Carrier-to-Noise Density Ratio - métrica de qualidade de sinal
-- **PRN**: Pseudo-Random Noise - identificador único do satélite (1-32 para GPS)
-- **SQM**: Signal Quality Monitoring - métricas de integridade do sinal
-- **TEXBAT**: Texas Spoofing Test Battery - dataset de referência
-- **FWHM**: Full Width at Half Maximum - largura do pico à meia altura
-- **Spoofing**: Ataque de transmissão de sinais GNSS falsos
-- **Meaconing**: Retransmissão de sinal autêntico com delay
+### Modularity
+
+**Decision**: Separate preprocessing, feature extraction, and modeling.
+
+**Benefits**:
+- **Testability**: Each module tested independently
+- **Flexibility**: Easy to swap components
+- **Reusability**: Preprocessing useful for other GPS applications
+- **Debugging**: Isolate problems to specific stage
+
+### Reproducibility
+
+**Decisions**:
+1. **Fixed Random Seeds**: `random_state=42` everywhere
+2. **Stratified Splits**: Ensure consistent class distribution
+3. **Pipeline Configs**: Save preprocessing/feature parameters
+4. **Model Serialization**: Save trained models with metadata
+
+**Implementation**:
+```python
+# Example
+config = {
+    'random_state': 42,
+    'preprocessing': {...},
+    'feature_extraction': {...},
+    'model': {...}
+}
+joblib.dump({'model': model, 'config': config}, 'model.pkl')
+```
+
+### Scalability
+
+**Considerations**:
+1. **Streaming Processing**: Process files in segments (not all in memory)
+2. **Parallel Processing**: Use `n_jobs=-1` where possible
+3. **Efficient Correlation**: FFT-based (O(N log N)) not direct (O(N²))
+4. **Feature Selection**: Reduce dimensionality if needed
 
 ---
 
-**Última atualização**: 2024-12-06  
-**Autores**: Pipeline desenvolvida para ES413 (Cin/UFPE) - Projeto SinaisProject
+## References
+
+### GPS Signal Processing
+1. IS-GPS-200: GPS Interface Specification
+2. Kaplan & Hegarty: "Understanding GPS/GNSS: Principles and Applications"
+3. Borre et al.: "A Software-Defined GPS and Galileo Receiver"
+
+### Spoofing Detection
+4. Psiaki & Humphreys: "GNSS Spoofing and Detection" (IEEE)
+5. TEXBAT Dataset: https://radionavlab.ae.utexas.edu/
+
+### Signal Processing
+6. Oppenheim & Schafer: "Discrete-Time Signal Processing"
+7. Proakis & Manolakis: "Digital Signal Processing"
+
+### Machine Learning
+8. Hastie et al.: "The Elements of Statistical Learning"
+9. Scikit-learn Documentation: https://scikit-learn.org/
+
+---
+
+## Future Improvements
+
+### Signal Processing
+- Adaptive interference mitigation
+- Multi-correlator tracking
+- Carrier phase analysis
+
+### Features
+- Multi-PRN features (cross-channel correlation)
+- Temporal change detection (CUSUM, change-point)
+- Doppler rate features
+
+### Models
+- Deep learning (CNN for correlation profiles)
+- Online learning (adapt to new spoofing techniques)
+- Ensemble methods (combine multiple approaches)
+
+### System
+- Real-time processing
+- Hardware acceleration (GPU)
+- Integration with receiver firmware
+
+---
+
+*This document will be updated as the project evolves and new techniques are incorporated.*
